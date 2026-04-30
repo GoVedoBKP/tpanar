@@ -1,0 +1,135 @@
+/*
+ * TPanar - Digital Audio Workstation
+ * Copyright (C) 2025  Miroslav Shaltev
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <wx/panel.h>
+#include <wx/scrolwin.h>
+#include <wx/button.h>
+#include <wx/sizer.h>
+#include <wx/dc.h>
+#include <set>
+
+namespace tpanar_ns {
+
+class Engine;
+class SampleInstrument;
+
+class TracksPanel : public wxPanel {
+public:
+    TracksPanel(wxWindow* parent, Engine& engine);
+    void update();
+
+public:
+    void set_tab_index(int idx) { m_tab_index = idx; }
+
+private:
+    void on_zoom_in(wxCommandEvent& event);
+    void on_zoom_out(wxCommandEvent& event);
+    void on_view_all(wxCommandEvent& event);
+    void on_view_sel(wxCommandEvent& event);
+    void on_detach(wxCommandEvent& event);
+    void on_cut(wxCommandEvent& event);
+    void on_copy(wxCommandEvent& event);
+    void on_paste(wxCommandEvent& event);
+    void on_silence(wxCommandEvent& event);
+    void on_insert_silence(wxCommandEvent& event);
+
+    Engine& m_engine;
+    int m_tab_index = -1;
+    wxButton* m_zoom_in_btn;
+    wxButton* m_zoom_out_btn;
+    wxButton* m_view_all_btn;
+    wxButton* m_view_sel_btn;
+    wxButton* m_detach_btn;
+    wxButton* m_cut_btn;
+    wxButton* m_copy_btn;
+    wxButton* m_paste_btn;
+    wxButton* m_silence_btn;
+    wxButton* m_insert_btn;
+    class TracksView* m_tracks_view;
+    class DetachedFrame* m_detached_frame = nullptr;
+
+    wxDECLARE_EVENT_TABLE();
+};
+
+class TracksView : public wxScrolledWindow {
+public:
+    struct AudioRegion {
+        size_t start_sample;
+        size_t end_sample;
+        bool is_overlapping;
+    };
+
+    TracksView(wxWindow* parent, wxWindowID id, Engine& engine);
+
+    int get_total_ticks();
+    void zoom_in();
+    void zoom_out();
+    void view_all();
+    void view_selection();
+    void update_view();
+    void OnPaint(wxPaintEvent& event);
+    void OnMouseDown(wxMouseEvent& event);
+    void OnMouseDrag(wxMouseEvent& event);
+    void OnMouseUp(wxMouseEvent& event);
+    void OnMouseWheel(wxMouseEvent& event);
+    void OnMouseRightClick(wxMouseEvent& event);
+    void OnKeyDown(wxKeyEvent& event);
+    void OnSize(wxSizeEvent& event);
+    void OnContextMenu(wxContextMenuEvent& event);
+    void draw(wxDC& dc);
+    void do_cut();
+    void do_copy();
+    void do_paste();
+    void do_silence();
+    void do_insert_silence();
+    void do_retrigger_stretch_selection();
+    void do_retrigger_stretch_whole_track();
+    void do_undo();
+    void do_redo();
+
+private:
+    int tick_to_x(int tick);
+    int x_to_tick(int x);
+    int get_track_height(int track_idx) const;
+    void toggle_track_minimize(int track_idx);
+    int resolve_content_track_index(int display_track_idx) const;
+    bool is_track_selected(int track_idx) const;
+    std::vector<int> selected_tracks() const;
+    void select_single_track(int track_idx);
+    void select_track_range(int track_idx);
+    void toggle_track_selection(int track_idx);
+    std::vector<AudioRegion> detect_overlaps(const SampleInstrument* sampler);
+
+    Engine& m_engine;
+    double m_zoom = 10.0;
+    int m_scroll_x = 0;
+    bool m_needs_initial_view_all = true;
+
+    int m_sel_start_tick = -1;
+    int m_sel_end_tick = -1;
+    int m_selected_track = -1;
+    int m_selection_anchor_track = -1;
+    std::set<int> m_selected_tracks;
+    bool m_is_selecting = false;
+
+    wxDECLARE_EVENT_TABLE();
+};
+
+} // namespace tpanar_ns
