@@ -37,6 +37,7 @@ enum {
     ID_REMOVE_PATTERN,
     ID_COPY_PATTERN,
     ID_AUTO_SPLIT_PATTERN,
+    ID_JOIN_PATTERNS,
     ID_FOLLOW_PLAYBACK,
     ID_DETACH
 };
@@ -61,6 +62,7 @@ public:
     void on_remove_pattern(wxCommandEvent& event);
     void on_copy_pattern(wxCommandEvent& event);
     void on_auto_split_pattern(wxCommandEvent& event);
+    void on_join_patterns(wxCommandEvent& event);
     void on_follow_playback(wxCommandEvent& event);
     void on_detach(wxCommandEvent& event);
 public:
@@ -81,6 +83,7 @@ private:
     wxButton* m_copy_pattern_btn;
     wxChoice* m_split_bars_choice;
     wxButton* m_auto_split_btn;
+    wxButton* m_join_patterns_btn;
     wxToggleButton* m_follow_btn;
     wxButton* m_detach_btn;
 

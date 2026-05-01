@@ -1996,6 +1996,65 @@ bool Engine::auto_split_single_pattern(size_t target_bars)
     return true;
 }
 
+bool Engine::join_patterns_to_single()
+{
+    if (m_order.size() <= 1 || m_patterns.empty()) {
+        return false;
+    }
+
+    const bool playing = transport_state() != TransportState::Stopped;
+    const size_t reference_order_pos = std::min(
+        playing ? m_order_pos.load() : m_edit_order_pos.load(),
+        m_order.empty() ? 0 : (m_order.size() - 1));
+    const size_t old_absolute_row = absolute_song_row(*this, reference_order_pos, m_current_row);
+
+    size_t total_rows = 0;
+    for (size_t pat_idx : m_order) {
+        if (pat_idx < m_patterns.size()) {
+            total_rows += m_patterns[pat_idx]->row_count();
+        }
+    }
+    if (total_rows == 0) {
+        return false;
+    }
+
+    auto joined = std::make_unique<Pattern>(total_rows, m_tracks.size());
+    for (size_t track_index = 0; track_index < m_tracks.size(); ++track_index) {
+        size_t max_cols = 0;
+        for (size_t pat_idx : m_order) {
+            if (pat_idx < m_patterns.size()) {
+                max_cols = std::max(max_cols, m_patterns[pat_idx]->column_count(track_index));
+            }
+        }
+        joined->set_column_count(track_index, max_cols);
+    }
+
+    size_t dest_row = 0;
+    for (size_t pat_idx : m_order) {
+        if (pat_idx >= m_patterns.size()) continue;
+
+        const Pattern& source = *m_patterns[pat_idx];
+        for (size_t track_index = 0; track_index < m_tracks.size(); ++track_index) {
+            for (size_t row = 0; row < source.row_count(); ++row) {
+                for (size_t col = 0; col < MAX_COLS; ++col) {
+                    joined->event(track_index, dest_row + row, col) = source.event(track_index, row, col);
+                }
+            }
+        }
+        dest_row += source.row_count();
+    }
+
+    m_patterns.clear();
+    m_patterns.push_back(std::move(joined));
+    m_order.assign(1, 0);
+    m_order_pos.store(0);
+    m_edit_order_pos.store(0);
+    m_current_row = std::min(old_absolute_row, total_rows - 1);
+    set_active_pattern(0);
+    mark_dirty();
+    return true;
+}
+
 void Engine::erase_pattern(size_t pattern_index)
 {
     if (pattern_index >= m_patterns.size()) {

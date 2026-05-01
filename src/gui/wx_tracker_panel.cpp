@@ -32,6 +32,7 @@ wxBEGIN_EVENT_TABLE(TrackerPanel, wxPanel)
     EVT_BUTTON(ID_REMOVE_PATTERN, TrackerPanel::on_remove_pattern)
     EVT_BUTTON(ID_COPY_PATTERN, TrackerPanel::on_copy_pattern)
     EVT_BUTTON(ID_AUTO_SPLIT_PATTERN, TrackerPanel::on_auto_split_pattern)
+    EVT_BUTTON(ID_JOIN_PATTERNS, TrackerPanel::on_join_patterns)
     EVT_TOGGLEBUTTON(ID_FOLLOW_PLAYBACK, TrackerPanel::on_follow_playback)
     EVT_BUTTON(ID_DETACH, TrackerPanel::on_detach)
 wxEND_EVENT_TABLE()
@@ -106,6 +107,13 @@ TrackerPanel::TrackerPanel(wxWindow* parent, Engine& engine)
     row3->Add(m_auto_split_btn, 0, wxALL, PAD);
     left_col->Add(row3, 0, wxEXPAND);
 
+    wxBoxSizer* row4 = new wxBoxSizer(wxHORIZONTAL);
+    m_join_patterns_btn = new wxButton(this, ID_JOIN_PATTERNS, "Join", wxDefaultPosition, wxSize(PLW - M, BTN_H));
+    m_join_patterns_btn->SetMinSize(wxSize(PLW - M, BTN_H));
+    m_join_patterns_btn->SetToolTip("Join the whole pattern list into one large single pattern");
+    row4->Add(m_join_patterns_btn, 1, wxALL | wxEXPAND, PAD);
+    left_col->Add(row4, 0, wxEXPAND);
+
     // Pattern list scroll (expands vertically to fill remaining space)
     int pattern_list_width = 120;
     m_pattern_scroll = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition,
@@ -175,6 +183,17 @@ void TrackerPanel::on_auto_split_pattern(wxCommandEvent& event) {
     }
 }
 
+void TrackerPanel::on_join_patterns(wxCommandEvent& event) {
+    if (m_engine.join_patterns_to_single()) {
+        m_selected_order_idx = 0;
+        if (!m_engine.order_list().empty()) {
+            m_engine.m_edit_order_pos.store(0);
+            m_engine.set_active_pattern(m_engine.order_list()[0]);
+        }
+        update_pattern_list();
+    }
+}
+
 void TrackerPanel::on_follow_playback(wxCommandEvent& event) {
     m_follow_playback = m_follow_btn->GetValue();
 }
@@ -196,8 +215,10 @@ void TrackerPanel::update_pattern_list() {
         m_engine.pattern_count() == 1 &&
         !order.empty() &&
         m_engine.pattern(order[0]).row_count() > m_engine.lpb() * 4u;
+    const bool can_join_patterns = order.size() > 1;
     if (m_split_bars_choice) m_split_bars_choice->Enable(can_auto_split);
     if (m_auto_split_btn) m_auto_split_btn->Enable(can_auto_split);
+    if (m_join_patterns_btn) m_join_patterns_btn->Enable(can_join_patterns);
     m_last_order_size = order.size();
     m_last_pattern_count = m_engine.pattern_count();
 
