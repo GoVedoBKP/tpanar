@@ -263,7 +263,8 @@ namespace tpanar_ns
 
         engine.set_tempo(j["tempo"]);
         engine.set_lpb(j["lpb"]);
-        engine.set_order(j["order"].get<::std::vector<size_t>>());
+        const ::std::vector<size_t> loaded_order =
+            j.contains("order") ? j["order"].get<::std::vector<size_t>>() : ::std::vector<size_t>{0};
 
         if (j.contains("metadata")) {
             auto& jm = j["metadata"];
@@ -429,6 +430,9 @@ namespace tpanar_ns
         }
         engine.ensure_tempo_track();
         engine.ensure_pilot_track();
+        engine.set_order(loaded_order);
+        engine.m_order_pos.store(0);
+        engine.m_edit_order_pos.store(0);
         return true;
     }
 

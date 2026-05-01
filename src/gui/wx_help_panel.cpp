@@ -79,8 +79,10 @@ void HelpPanel::load_documentation() {
 <h2>Tracker Tab</h2>
 <p>The tracker shows the tempo track and note tracks only. Audio tracks do not appear here.</p>
 <ul>
+<li>The pattern list is a linear set: each song position owns its own pattern instead of reusing references to an earlier one.</li>
 <li>Each note sub-column contains <b>Note</b> and <b>Volume</b> fields.</li>
 <li>Use the header <b>+</b> and <b>-</b> buttons to change the number of sub-columns, up to <b>3</b>.</li>
+<li>Use pattern copy when you want a starting point for the next section: it creates a new editable clone rather than another reference to the same pattern.</li>
 <li>The tracker is intended for note correction, velocity work, and pattern editing after analysis or manual entry.</li>
 </ul>
 <table width="100%" border="0" cellpadding="3">

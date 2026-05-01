@@ -349,12 +349,25 @@ bool stretch_channel_segment(const std::vector<float>& source,
 
 void materialize_unique_order_patterns(Engine& engine)
 {
+    if (engine.pattern_count() == 0) {
+        engine.create_pattern();
+    }
+
     std::unordered_set<size_t> seen;
-    for (size_t order_pos = 0; order_pos < engine.m_order.size(); ++order_pos) {
+    for (size_t order_pos = 0; order_pos < engine.m_order.size();) {
         size_t pat_idx = engine.m_order[order_pos];
+        if (pat_idx >= engine.pattern_count()) {
+            engine.m_order.erase(engine.m_order.begin() + order_pos);
+            continue;
+        }
         if (!seen.insert(pat_idx).second) {
             engine.m_order[order_pos] = engine.copy_pattern(pat_idx);
         }
+        ++order_pos;
+    }
+
+    if (engine.m_order.empty()) {
+        engine.m_order.push_back(0);
     }
 }
 
@@ -1589,6 +1602,15 @@ std::vector<size_t> Engine::order_list() const {
 }
 void Engine::set_order(const std::vector<size_t>& o) {
     m_order = o;
+    materialize_unique_order_patterns(*this);
+
+    const size_t last_order = m_order.empty() ? 0 : (m_order.size() - 1);
+    m_order_pos.store(std::min(m_order_pos.load(), last_order));
+    m_edit_order_pos.store(std::min(m_edit_order_pos.load(), last_order));
+    if (!m_order.empty()) {
+        const size_t edit_pos = std::min(m_edit_order_pos.load(), last_order);
+        set_active_pattern(m_order[edit_pos]);
+    }
     mark_dirty();
 }
 size_t Engine::add_pattern_to_order() { 
@@ -1597,14 +1619,62 @@ size_t Engine::add_pattern_to_order() {
     mark_dirty();
     return m_order.size() - 1; 
 }
-void Engine::remove_pattern_from_order(size_t pos) { if (pos < m_order.size()) { m_order.erase(m_order.begin() + pos); mark_dirty(); } }
+void Engine::remove_pattern_from_order(size_t pos) {
+    if (pos >= m_order.size() || m_order.size() <= 1) {
+        return;
+    }
+
+    erase_pattern(m_order[pos]);
+    mark_dirty();
+}
 size_t Engine::copy_pattern_in_order(size_t pos) {
     if (pos < m_order.size()) { 
         size_t new_pat = copy_pattern(m_order[pos]);
         m_order.insert(m_order.begin() + pos + 1, new_pat); 
+        mark_dirty();
         return pos + 1; 
     }
     return pos;
+}
+
+void Engine::erase_pattern(size_t pattern_index)
+{
+    if (pattern_index >= m_patterns.size()) {
+        return;
+    }
+
+    m_patterns.erase(m_patterns.begin() + pattern_index);
+
+    for (auto it = m_order.begin(); it != m_order.end();) {
+        if (*it == pattern_index) {
+            it = m_order.erase(it);
+            continue;
+        }
+        if (*it > pattern_index) {
+            --(*it);
+        }
+        ++it;
+    }
+
+    if (m_patterns.empty()) {
+        create_pattern();
+    }
+    if (m_order.empty()) {
+        m_order.push_back(0);
+    }
+
+    const size_t last_pattern = m_patterns.empty() ? 0 : (m_patterns.size() - 1);
+    const size_t last_order = m_order.empty() ? 0 : (m_order.size() - 1);
+    const size_t active = m_active_pattern.load();
+    if (active > pattern_index) {
+        m_active_pattern.store(active - 1);
+    } else if (active == pattern_index) {
+        m_active_pattern.store(std::min(pattern_index, last_pattern));
+    }
+
+    m_order_pos.store(std::min(m_order_pos.load(), last_order));
+    m_edit_order_pos.store(std::min(m_edit_order_pos.load(), last_order));
+    set_active_pattern(m_order[m_edit_order_pos.load()]);
 }
 
 double Engine::tempo() const { return m_timing.tempo(); }

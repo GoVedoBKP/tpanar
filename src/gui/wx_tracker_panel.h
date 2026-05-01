@@ -35,8 +35,6 @@ enum {
     ID_ADD_PATTERN = 100,
     ID_REMOVE_PATTERN,
     ID_COPY_PATTERN,
-    ID_DEC_PATTERN,
-    ID_INC_PATTERN,
     ID_FOLLOW_PLAYBACK,
     ID_DETACH
 };
@@ -60,8 +58,6 @@ public:
     void on_add_pattern(wxCommandEvent& event);
     void on_remove_pattern(wxCommandEvent& event);
     void on_copy_pattern(wxCommandEvent& event);
-    void on_inc_pattern(wxCommandEvent& event);
-    void on_dec_pattern(wxCommandEvent& event);
     void on_follow_playback(wxCommandEvent& event);
     void on_detach(wxCommandEvent& event);
 public:
@@ -80,8 +76,6 @@ private:
     wxButton* m_add_pattern_btn;
     wxButton* m_remove_pattern_btn;
     wxButton* m_copy_pattern_btn;
-    wxButton* m_dec_pattern_btn;
-    wxButton* m_inc_pattern_btn;
     wxToggleButton* m_follow_btn;
     wxButton* m_detach_btn;
 

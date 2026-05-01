@@ -31,8 +31,6 @@ wxBEGIN_EVENT_TABLE(TrackerPanel, wxPanel)
     EVT_BUTTON(ID_ADD_PATTERN, TrackerPanel::on_add_pattern)
     EVT_BUTTON(ID_REMOVE_PATTERN, TrackerPanel::on_remove_pattern)
     EVT_BUTTON(ID_COPY_PATTERN, TrackerPanel::on_copy_pattern)
-    EVT_BUTTON(ID_INC_PATTERN, TrackerPanel::on_inc_pattern)
-    EVT_BUTTON(ID_DEC_PATTERN, TrackerPanel::on_dec_pattern)
     EVT_TOGGLEBUTTON(ID_FOLLOW_PLAYBACK, TrackerPanel::on_follow_playback)
     EVT_BUTTON(ID_DETACH, TrackerPanel::on_detach)
 wxEND_EVENT_TABLE()
@@ -49,14 +47,13 @@ TrackerPanel::TrackerPanel(wxWindow* parent, Engine& engine)
     // ── Content row: [left column] [tracker view] ──────────────────────────
     wxBoxSizer* content_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    // ── Left column: 3 button rows + pattern list ──────────────────────────
+    // ── Left column: 2 button rows + pattern list ──────────────────────────
     wxBoxSizer* left_col = new wxBoxSizer(wxVERTICAL);
 
     // Pre-compute button widths so each row exactly matches pattern_list_width.
     //   Each slot = total / n_buttons; button pixel width = slot - M.
     const int PLW   = 120;      // pattern list width (matches wxSize below)
     const int B2W   = PLW / 3 - M;   // row-2: 3 equal buttons  → 36px
-    const int B3W   = PLW / 2 - M;   // row-3: 2 equal buttons  → 56px
     const int B1FW  = PLW - (BTN_H + M) - M;  // row-1: follow fills rest → 86px
 
     // Row 1: Detach  |  Follow
@@ -79,33 +76,19 @@ TrackerPanel::TrackerPanel(wxWindow* parent, Engine& engine)
     m_add_pattern_btn = new wxButton(this, ID_ADD_PATTERN, "", wxDefaultPosition, wxSize(B2W, BTN_H));
     m_add_pattern_btn->SetMinSize(wxSize(B2W, BTN_H));
     m_add_pattern_btn->SetBitmap(wxArtProvider::GetBitmap(wxART_PLUS, wxART_BUTTON, wxSize(14, 14)));
-    m_add_pattern_btn->SetToolTip("Add pattern to order");
+    m_add_pattern_btn->SetToolTip("Add a new pattern");
     row2->Add(m_add_pattern_btn, 0, wxALL, PAD);
     m_remove_pattern_btn = new wxButton(this, ID_REMOVE_PATTERN, "", wxDefaultPosition, wxSize(B2W, BTN_H));
     m_remove_pattern_btn->SetMinSize(wxSize(B2W, BTN_H));
     m_remove_pattern_btn->SetBitmap(wxArtProvider::GetBitmap(wxART_MINUS, wxART_BUTTON, wxSize(14, 14)));
-    m_remove_pattern_btn->SetToolTip("Remove pattern from order");
+    m_remove_pattern_btn->SetToolTip("Remove selected pattern");
     row2->Add(m_remove_pattern_btn, 0, wxALL, PAD);
     m_copy_pattern_btn = new wxButton(this, ID_COPY_PATTERN, "", wxDefaultPosition, wxSize(B2W, BTN_H));
     m_copy_pattern_btn->SetMinSize(wxSize(B2W, BTN_H));
     m_copy_pattern_btn->SetBitmap(wxArtProvider::GetBitmap(wxART_COPY, wxART_BUTTON, wxSize(14, 14)));
-    m_copy_pattern_btn->SetToolTip("Duplicate pattern in order");
+    m_copy_pattern_btn->SetToolTip("Duplicate selected pattern as a new pattern");
     row2->Add(m_copy_pattern_btn, 0, wxALL, PAD);
     left_col->Add(row2, 0, wxEXPAND);
-
-    // Row 3: Prev position  |  Next position
-    wxBoxSizer* row3 = new wxBoxSizer(wxHORIZONTAL);
-    m_dec_pattern_btn = new wxButton(this, ID_DEC_PATTERN, "", wxDefaultPosition, wxSize(B3W, BTN_H));
-    m_dec_pattern_btn->SetMinSize(wxSize(B3W, BTN_H));
-    m_dec_pattern_btn->SetBitmap(wxArtProvider::GetBitmap(wxART_GO_BACK, wxART_BUTTON, wxSize(14, 14)));
-    m_dec_pattern_btn->SetToolTip("Decrement pattern index at current order position");
-    row3->Add(m_dec_pattern_btn, 0, wxALL, PAD);
-    m_inc_pattern_btn = new wxButton(this, ID_INC_PATTERN, "", wxDefaultPosition, wxSize(B3W, BTN_H));
-    m_inc_pattern_btn->SetMinSize(wxSize(B3W, BTN_H));
-    m_inc_pattern_btn->SetBitmap(wxArtProvider::GetBitmap(wxART_GO_FORWARD, wxART_BUTTON, wxSize(14, 14)));
-    m_inc_pattern_btn->SetToolTip("Increment pattern index at current order position");
-    row3->Add(m_inc_pattern_btn, 0, wxALL, PAD);
-    left_col->Add(row3, 0, wxEXPAND);
 
     // Pattern list scroll (expands vertically to fill remaining space)
     int pattern_list_width = 120;
@@ -161,34 +144,6 @@ void TrackerPanel::on_copy_pattern(wxCommandEvent& event) {
         m_engine.m_edit_order_pos.store(new_pos);
         m_engine.set_active_pattern(m_engine.order_list()[new_pos]);
         update_pattern_list();
-    }
-}
-
-void TrackerPanel::on_inc_pattern(wxCommandEvent& event) {
-    size_t pos = m_selected_order_idx;
-    auto order = m_engine.order_list();
-    if (pos < order.size()) {
-        if (order[pos] < m_engine.pattern_count() - 1) {
-            order[pos]++;
-            m_engine.set_order(order);
-            m_engine.set_active_pattern(order[pos]);
-            m_tracker->set_pattern(m_engine.pattern());
-            update_pattern_list();
-        }
-    }
-}
-
-void TrackerPanel::on_dec_pattern(wxCommandEvent& event) {
-    size_t pos = m_selected_order_idx;
-    auto order = m_engine.order_list();
-    if (pos < order.size()) {
-        if (order[pos] > 0) {
-            order[pos]--;
-            m_engine.set_order(order);
-            m_engine.set_active_pattern(order[pos]);
-            m_tracker->set_pattern(m_engine.pattern());
-            update_pattern_list();
-        }
     }
 }
 

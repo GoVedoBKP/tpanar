@@ -364,6 +364,7 @@ public:
     friend class SongSerializer;
 
 private:
+    void erase_pattern(size_t pattern_index);
     void start_armed_audio_recording();
     void stop_armed_audio_recording(bool commit);
     void assign_default_audio_input(tpanar_ns::Track& track, size_t track_index);
