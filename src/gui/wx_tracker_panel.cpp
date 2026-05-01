@@ -31,6 +31,7 @@ wxBEGIN_EVENT_TABLE(TrackerPanel, wxPanel)
     EVT_BUTTON(ID_ADD_PATTERN, TrackerPanel::on_add_pattern)
     EVT_BUTTON(ID_REMOVE_PATTERN, TrackerPanel::on_remove_pattern)
     EVT_BUTTON(ID_COPY_PATTERN, TrackerPanel::on_copy_pattern)
+    EVT_BUTTON(ID_AUTO_SPLIT_PATTERN, TrackerPanel::on_auto_split_pattern)
     EVT_TOGGLEBUTTON(ID_FOLLOW_PLAYBACK, TrackerPanel::on_follow_playback)
     EVT_BUTTON(ID_DETACH, TrackerPanel::on_detach)
 wxEND_EVENT_TABLE()
@@ -47,7 +48,7 @@ TrackerPanel::TrackerPanel(wxWindow* parent, Engine& engine)
     // ── Content row: [left column] [tracker view] ──────────────────────────
     wxBoxSizer* content_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    // ── Left column: 2 button rows + pattern list ──────────────────────────
+    // ── Left column: control rows + pattern list ───────────────────────────
     wxBoxSizer* left_col = new wxBoxSizer(wxVERTICAL);
 
     // Pre-compute button widths so each row exactly matches pattern_list_width.
@@ -89,6 +90,21 @@ TrackerPanel::TrackerPanel(wxWindow* parent, Engine& engine)
     m_copy_pattern_btn->SetToolTip("Duplicate selected pattern as a new pattern");
     row2->Add(m_copy_pattern_btn, 0, wxALL, PAD);
     left_col->Add(row2, 0, wxEXPAND);
+
+    // Row 3: split bars | auto split
+    wxBoxSizer* row3 = new wxBoxSizer(wxHORIZONTAL);
+    m_split_bars_choice = new wxChoice(this, wxID_ANY);
+    m_split_bars_choice->Append("4 bars");
+    m_split_bars_choice->Append("8 bars");
+    m_split_bars_choice->SetSelection(0);
+    m_split_bars_choice->SetToolTip("Preferred target size for automatic pattern splitting");
+    row3->Add(m_split_bars_choice, 1, wxALL | wxEXPAND, PAD);
+
+    m_auto_split_btn = new wxButton(this, ID_AUTO_SPLIT_PATTERN, "Split", wxDefaultPosition, wxSize(44, BTN_H));
+    m_auto_split_btn->SetMinSize(wxSize(44, BTN_H));
+    m_auto_split_btn->SetToolTip("Split a single large pattern into shorter sections using tempo changes and nearby low-activity bar boundaries");
+    row3->Add(m_auto_split_btn, 0, wxALL, PAD);
+    left_col->Add(row3, 0, wxEXPAND);
 
     // Pattern list scroll (expands vertically to fill remaining space)
     int pattern_list_width = 120;
@@ -147,6 +163,18 @@ void TrackerPanel::on_copy_pattern(wxCommandEvent& event) {
     }
 }
 
+void TrackerPanel::on_auto_split_pattern(wxCommandEvent& event) {
+    const size_t target_bars = (m_split_bars_choice && m_split_bars_choice->GetSelection() == 1) ? 8u : 4u;
+    if (m_engine.auto_split_single_pattern(target_bars)) {
+        m_selected_order_idx = (int)m_engine.m_edit_order_pos.load();
+        if (!m_engine.order_list().empty() && m_selected_order_idx >= 0 &&
+            (size_t)m_selected_order_idx < m_engine.order_list().size()) {
+            m_engine.set_active_pattern(m_engine.order_list()[(size_t)m_selected_order_idx]);
+        }
+        update_pattern_list();
+    }
+}
+
 void TrackerPanel::on_follow_playback(wxCommandEvent& event) {
     m_follow_playback = m_follow_btn->GetValue();
 }
@@ -163,6 +191,13 @@ void TrackerPanel::on_detach(wxCommandEvent& event) {
 void TrackerPanel::update_pattern_list() {
     m_tracker->set_pattern(m_engine.pattern());
     const auto& order = m_engine.order_list();
+    const bool can_auto_split =
+        order.size() == 1 &&
+        m_engine.pattern_count() == 1 &&
+        !order.empty() &&
+        m_engine.pattern(order[0]).row_count() > m_engine.lpb() * 4u;
+    if (m_split_bars_choice) m_split_bars_choice->Enable(can_auto_split);
+    if (m_auto_split_btn) m_auto_split_btn->Enable(can_auto_split);
     m_last_order_size = order.size();
     m_last_pattern_count = m_engine.pattern_count();
 

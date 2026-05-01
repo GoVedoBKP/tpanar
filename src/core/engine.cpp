@@ -37,6 +37,7 @@
 #include <thread>
 #include <chrono>
 #include <filesystem>
+#include <limits>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -270,6 +271,186 @@ size_t sample_index_for_absolute_row(const Engine& engine,
         : (double)engine.sample_rate();
     const double samples_per_row = engine_samples_per_row * (sample_rate / (double)engine.sample_rate());
     return std::min(sample.left.size(), (size_t)std::llround((double)absolute_row * samples_per_row));
+}
+
+size_t rows_per_bar(const Engine& engine)
+{
+    return std::max<size_t>(1, engine.lpb()) * 4u;
+}
+
+bool row_has_tempo_change(const Pattern& pat, size_t row)
+{
+    return row < pat.row_count() &&
+           pat.track_count() > Engine::TEMPO_TRACK_INDEX &&
+           pat.event(Engine::TEMPO_TRACK_INDEX, row, 0).param1 > 0;
+}
+
+size_t count_note_events_in_range(const Engine& engine,
+                                  const Pattern& pat,
+                                  size_t start_row,
+                                  size_t end_row)
+{
+    if (start_row >= end_row) return 0;
+
+    size_t count = 0;
+    const size_t clamped_end = std::min(end_row, pat.row_count());
+    for (size_t track_index = 0; track_index < pat.track_count() && track_index < engine.track_count(); ++track_index) {
+        if (engine.track(track_index).kind() != TrackKind::Note) continue;
+
+        const size_t col_count = pat.column_count(track_index);
+        for (size_t row = start_row; row < clamped_end; ++row) {
+            for (size_t col = 0; col < col_count; ++col) {
+                const uint8_t note = pat.event(track_index, row, col).note;
+                if (note != NOTE_EMPTY && note != 254) {
+                    ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
+bool has_note_activity_near_boundary(const Engine& engine, const Pattern& pat, size_t boundary_row)
+{
+    if (boundary_row >= pat.row_count()) return false;
+    const size_t start = boundary_row > 0 ? boundary_row - 1 : 0;
+    const size_t end = std::min(pat.row_count(), boundary_row + 2);
+    return count_note_events_in_range(engine, pat, start, end) > 0;
+}
+
+double audio_energy_in_range(const Engine& engine, size_t start_row, size_t end_row)
+{
+    if (start_row >= end_row) return 0.0;
+
+    double total_energy = 0.0;
+    size_t contributing_tracks = 0;
+    for (size_t track_index = 0; track_index < engine.track_count(); ++track_index) {
+        if (engine.track(track_index).kind() != TrackKind::Audio) continue;
+
+        const auto sample = resolve_audio_track_sample(engine, track_index);
+        if (!sample || sample->left.empty()) continue;
+
+        const size_t start_sample = sample_index_for_absolute_row(engine, *sample, start_row);
+        const size_t end_sample = sample_index_for_absolute_row(engine, *sample, end_row);
+        if (end_sample <= start_sample) continue;
+
+        const bool has_right = !sample->right.empty();
+        const size_t length = end_sample - start_sample;
+        const size_t stride = std::max<size_t>(1, length / 4096);
+        double sum = 0.0;
+        size_t count = 0;
+        for (size_t i = start_sample; i < end_sample; i += stride) {
+            float mono = sample->left[i];
+            if (has_right && i < sample->right.size()) {
+                mono = 0.5f * (mono + sample->right[i]);
+            }
+            sum += std::abs((double)mono);
+            ++count;
+        }
+
+        if (count == 0) continue;
+        total_energy += sum / (double)count;
+        ++contributing_tracks;
+    }
+
+    if (contributing_tracks == 0) return 0.0;
+    return total_energy / (double)contributing_tracks;
+}
+
+std::vector<size_t> collect_audio_track_end_rows(const Engine& engine)
+{
+    std::vector<size_t> rows;
+    const double engine_samples_per_row = (engine.lpb() > 0 && engine.tempo() > 0.0)
+        ? (((double)engine.sample_rate() * 60.0) / engine.tempo()) / (double)engine.lpb()
+        : (double)engine.sample_rate();
+    if (engine_samples_per_row <= 0.0) return rows;
+
+    for (size_t track_index = 0; track_index < engine.track_count(); ++track_index) {
+        if (engine.track(track_index).kind() != TrackKind::Audio) continue;
+
+        const auto sample = resolve_audio_track_sample(engine, track_index);
+        if (!sample || sample->left.empty()) continue;
+
+        const size_t sample_length = std::max(sample->left.size(), sample->right.size());
+        const double sample_rate = sample->sample_rate > 0 ? (double)sample->sample_rate : (double)engine.sample_rate();
+        if (sample_rate <= 0.0) continue;
+
+        const double seconds = (double)sample_length / sample_rate;
+        const size_t row = (size_t)std::llround(seconds * ((double)engine.sample_rate() / engine_samples_per_row));
+        if (row > 0) rows.push_back(row);
+    }
+
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    return rows;
+}
+
+double split_boundary_score(const Engine& engine,
+                            const Pattern& pat,
+                            size_t boundary_row,
+                            size_t bar_rows,
+                            const std::vector<size_t>& audio_end_rows)
+{
+    const size_t prev_start = boundary_row > bar_rows ? boundary_row - bar_rows : 0;
+    const size_t next_end = std::min(pat.row_count(), boundary_row + bar_rows);
+    const size_t span_rows = std::max<size_t>(1, next_end - prev_start);
+
+    const double note_density =
+        (double)count_note_events_in_range(engine, pat, prev_start, next_end) / (double)span_rows;
+    const double audio_energy = audio_energy_in_range(engine, prev_start, next_end);
+
+    double score = note_density * 12.0 + audio_energy * 6.0;
+    if (has_note_activity_near_boundary(engine, pat, boundary_row)) {
+        score += 4.0;
+    }
+
+    for (size_t end_row : audio_end_rows) {
+        const size_t distance = end_row > boundary_row ? end_row - boundary_row : boundary_row - end_row;
+        if (distance <= bar_rows / 2) {
+            score -= 2.5;
+            break;
+        }
+    }
+
+    return score;
+}
+
+size_t choose_split_bar_boundary(const Engine& engine,
+                                 const Pattern& pat,
+                                 size_t segment_start,
+                                 size_t segment_end,
+                                 size_t target_row,
+                                 size_t bar_rows,
+                                 const std::vector<size_t>& audio_end_rows)
+{
+    if (segment_end <= segment_start + 1 || bar_rows == 0) return 0;
+
+    const size_t first_bar = ((segment_start + 1 + bar_rows - 1) / bar_rows) * bar_rows;
+    const size_t search_radius = bar_rows;
+    size_t best_row = 0;
+    double best_score = std::numeric_limits<double>::infinity();
+    size_t nearest_row = 0;
+    size_t nearest_distance = std::numeric_limits<size_t>::max();
+
+    for (size_t row = first_bar; row < segment_end; row += bar_rows) {
+        if (row <= segment_start || row >= segment_end) continue;
+
+        const size_t distance = row > target_row ? row - target_row : target_row - row;
+        if (distance < nearest_distance) {
+            nearest_distance = distance;
+            nearest_row = row;
+        }
+
+        if (distance > search_radius) continue;
+
+        const double score = split_boundary_score(engine, pat, row, bar_rows, audio_end_rows);
+        if (score < best_score || (score == best_score && distance < nearest_distance)) {
+            best_score = score;
+            best_row = row;
+        }
+    }
+
+    return best_row != 0 ? best_row : nearest_row;
 }
 
 std::vector<size_t> collect_note_rows(const Engine& engine,
@@ -1681,6 +1862,138 @@ void Engine::sync_single_pattern_to_longest_audio_track()
         m_current_row = pat.row_count() - 1;
     }
     mark_dirty();
+}
+
+bool Engine::auto_split_single_pattern(size_t target_bars)
+{
+    if (target_bars == 0 || m_patterns.size() != 1 || m_order.size() != 1 || m_order[0] >= m_patterns.size()) {
+        return false;
+    }
+
+    const Pattern& source = *m_patterns[m_order[0]];
+    const size_t total_rows = source.row_count();
+    const size_t bar_rows = rows_per_bar(*this);
+    const size_t target_rows = std::max<size_t>(bar_rows, target_bars * bar_rows);
+    if (total_rows <= bar_rows) {
+        return false;
+    }
+
+    std::vector<size_t> hard_boundaries;
+    hard_boundaries.reserve(total_rows / bar_rows);
+    for (size_t row = 1; row < total_rows; ++row) {
+        if (row_has_tempo_change(source, row)) {
+            hard_boundaries.push_back(row);
+        }
+    }
+    std::sort(hard_boundaries.begin(), hard_boundaries.end());
+    hard_boundaries.erase(std::unique(hard_boundaries.begin(), hard_boundaries.end()), hard_boundaries.end());
+    if (hard_boundaries.empty() && total_rows <= target_rows) {
+        return false;
+    }
+
+    const std::vector<size_t> audio_end_rows = collect_audio_track_end_rows(*this);
+
+    std::vector<size_t> boundaries;
+    size_t segment_start = 0;
+    size_t hard_index = 0;
+    while (segment_start < total_rows) {
+        const size_t segment_end = hard_index < hard_boundaries.size() ? hard_boundaries[hard_index] : total_rows;
+
+        size_t local_start = segment_start;
+        while (local_start + target_rows < segment_end) {
+            const size_t target_row = local_start + target_rows;
+            size_t cut_row = choose_split_bar_boundary(*this, source, local_start, segment_end, target_row, bar_rows, audio_end_rows);
+            if (cut_row <= local_start || cut_row >= segment_end) {
+                break;
+            }
+            boundaries.push_back(cut_row);
+            local_start = cut_row;
+        }
+
+        if (segment_end < total_rows) {
+            boundaries.push_back(segment_end);
+        }
+        segment_start = segment_end;
+        if (hard_index < hard_boundaries.size()) {
+            ++hard_index;
+        }
+    }
+
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+    boundaries.erase(std::remove_if(boundaries.begin(), boundaries.end(),
+        [total_rows](size_t row) { return row == 0 || row >= total_rows; }), boundaries.end());
+    if (boundaries.empty()) {
+        return false;
+    }
+
+    const size_t old_absolute_row = std::min(m_current_row, total_rows - 1);
+
+    std::vector<std::unique_ptr<Pattern>> new_patterns;
+    std::vector<size_t> new_order;
+    new_patterns.reserve(boundaries.size() + 1);
+    new_order.reserve(boundaries.size() + 1);
+
+    size_t segment_row = 0;
+    for (size_t boundary_row : boundaries) {
+        const size_t segment_rows = boundary_row - segment_row;
+        if (segment_rows == 0) continue;
+
+        auto pat = std::make_unique<Pattern>(segment_rows, m_tracks.size());
+        for (size_t track_index = 0; track_index < m_tracks.size(); ++track_index) {
+            pat->set_column_count(track_index, source.column_count(track_index));
+            for (size_t row = 0; row < segment_rows; ++row) {
+                for (size_t col = 0; col < MAX_COLS; ++col) {
+                    pat->event(track_index, row, col) = source.event(track_index, segment_row + row, col);
+                }
+            }
+        }
+
+        new_order.push_back(new_patterns.size());
+        new_patterns.push_back(std::move(pat));
+        segment_row = boundary_row;
+    }
+
+    if (segment_row < total_rows) {
+        const size_t segment_rows = total_rows - segment_row;
+        auto pat = std::make_unique<Pattern>(segment_rows, m_tracks.size());
+        for (size_t track_index = 0; track_index < m_tracks.size(); ++track_index) {
+            pat->set_column_count(track_index, source.column_count(track_index));
+            for (size_t row = 0; row < segment_rows; ++row) {
+                for (size_t col = 0; col < MAX_COLS; ++col) {
+                    pat->event(track_index, row, col) = source.event(track_index, segment_row + row, col);
+                }
+            }
+        }
+        new_order.push_back(new_patterns.size());
+        new_patterns.push_back(std::move(pat));
+    }
+
+    if (new_patterns.size() <= 1) {
+        return false;
+    }
+
+    size_t new_order_pos = 0;
+    size_t new_row = old_absolute_row;
+    size_t rows_done = 0;
+    for (size_t i = 0; i < new_patterns.size(); ++i) {
+        const size_t pat_rows = new_patterns[i]->row_count();
+        if (old_absolute_row < rows_done + pat_rows) {
+            new_order_pos = i;
+            new_row = old_absolute_row - rows_done;
+            break;
+        }
+        rows_done += pat_rows;
+    }
+
+    m_patterns = std::move(new_patterns);
+    m_order = std::move(new_order);
+    m_order_pos.store(new_order_pos);
+    m_edit_order_pos.store(new_order_pos);
+    m_current_row = new_row;
+    set_active_pattern(m_order[new_order_pos]);
+    mark_dirty();
+    return true;
 }
 
 void Engine::erase_pattern(size_t pattern_index)

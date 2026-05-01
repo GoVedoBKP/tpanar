@@ -83,6 +83,7 @@ void HelpPanel::load_documentation() {
 <li>Each note sub-column contains <b>Note</b> and <b>Volume</b> fields.</li>
 <li>Use the header <b>+</b> and <b>-</b> buttons to change the number of sub-columns, up to <b>3</b>.</li>
 <li>Use pattern copy when you want a starting point for the next section: it creates a new editable clone rather than another reference to the same pattern.</li>
+<li>Use <b>Split</b> with the <b>4 bars</b> / <b>8 bars</b> selector to turn one long pattern into shorter sections; tempo changes become hard cuts and the remaining cuts are placed on nearby lower-activity bar boundaries.</li>
 <li>The tracker is intended for note correction, velocity work, and pattern editing after analysis or manual entry.</li>
 </ul>
 <table width="100%" border="0" cellpadding="3">

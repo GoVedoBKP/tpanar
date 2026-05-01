@@ -135,6 +135,7 @@ public:
     void remove_pattern_from_order(size_t order_pos);
     size_t copy_pattern_in_order(size_t order_pos);
     void sync_single_pattern_to_longest_audio_track();
+    bool auto_split_single_pattern(size_t target_bars);
 
     size_t m_samples_until_next_tick = 0;
     int    m_current_tick = 0;

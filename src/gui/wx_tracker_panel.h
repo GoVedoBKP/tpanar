@@ -22,6 +22,7 @@
 #include <wx/panel.h>
 #include <wx/scrolwin.h>
 #include <wx/button.h>
+#include <wx/choice.h>
 #include <wx/sizer.h>
 #include <wx/tglbtn.h>
 #include <wx/stattext.h>
@@ -35,6 +36,7 @@ enum {
     ID_ADD_PATTERN = 100,
     ID_REMOVE_PATTERN,
     ID_COPY_PATTERN,
+    ID_AUTO_SPLIT_PATTERN,
     ID_FOLLOW_PLAYBACK,
     ID_DETACH
 };
@@ -58,6 +60,7 @@ public:
     void on_add_pattern(wxCommandEvent& event);
     void on_remove_pattern(wxCommandEvent& event);
     void on_copy_pattern(wxCommandEvent& event);
+    void on_auto_split_pattern(wxCommandEvent& event);
     void on_follow_playback(wxCommandEvent& event);
     void on_detach(wxCommandEvent& event);
 public:
@@ -76,6 +79,8 @@ private:
     wxButton* m_add_pattern_btn;
     wxButton* m_remove_pattern_btn;
     wxButton* m_copy_pattern_btn;
+    wxChoice* m_split_bars_choice;
+    wxButton* m_auto_split_btn;
     wxToggleButton* m_follow_btn;
     wxButton* m_detach_btn;
 
