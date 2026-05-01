@@ -431,6 +431,7 @@ namespace tpanar_ns
         engine.ensure_tempo_track();
         engine.ensure_pilot_track();
         engine.set_order(loaded_order);
+        engine.sync_single_pattern_to_longest_audio_track();
         engine.m_order_pos.store(0);
         engine.m_edit_order_pos.store(0);
         return true;

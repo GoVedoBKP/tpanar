@@ -383,6 +383,22 @@ void refresh_audio_track_sources(Engine& engine)
     }
 }
 
+size_t longest_audio_track_samples(const Engine& engine)
+{
+    size_t longest = 0;
+    for (size_t i = 0; i < engine.track_count(); ++i) {
+        const Track& track = engine.track(i);
+        if (track.kind() != TrackKind::Audio) continue;
+
+        const auto sample = resolve_audio_track_sample(engine, i);
+        if (!sample) continue;
+
+        longest = std::max(longest, sample->left.size());
+        longest = std::max(longest, sample->right.size());
+    }
+    return longest;
+}
+
 size_t audio_track_ordinal(const Engine& engine, size_t track_index)
 {
     size_t ordinal = 0;
@@ -1611,6 +1627,7 @@ void Engine::set_order(const std::vector<size_t>& o) {
         const size_t edit_pos = std::min(m_edit_order_pos.load(), last_order);
         set_active_pattern(m_order[edit_pos]);
     }
+    sync_single_pattern_to_longest_audio_track();
     mark_dirty();
 }
 size_t Engine::add_pattern_to_order() { 
@@ -1635,6 +1652,35 @@ size_t Engine::copy_pattern_in_order(size_t pos) {
         return pos + 1; 
     }
     return pos;
+}
+
+void Engine::sync_single_pattern_to_longest_audio_track()
+{
+    if (m_patterns.size() != 1 || m_order.size() != 1 || m_order[0] >= m_patterns.size()) {
+        return;
+    }
+
+    const size_t longest_samples = longest_audio_track_samples(*this);
+    if (longest_samples == 0) {
+        return;
+    }
+
+    const size_t samples_per_row = m_timing.samples_per_row();
+    if (samples_per_row == 0) {
+        return;
+    }
+
+    const size_t required_rows = std::max<size_t>(1, (longest_samples + samples_per_row - 1) / samples_per_row);
+    Pattern& pat = *m_patterns[m_order[0]];
+    if (pat.row_count() == required_rows) {
+        return;
+    }
+
+    pat.resize_rows(required_rows);
+    if (m_current_row >= pat.row_count()) {
+        m_current_row = pat.row_count() - 1;
+    }
+    mark_dirty();
 }
 
 void Engine::erase_pattern(size_t pattern_index)
@@ -1678,9 +1724,17 @@ void Engine::erase_pattern(size_t pattern_index)
 }
 
 double Engine::tempo() const { return m_timing.tempo(); }
-void Engine::set_tempo(double bpm) { m_timing.set_bpm((int)bpm); mark_dirty(); }
+void Engine::set_tempo(double bpm) {
+    m_timing.set_bpm((int)bpm);
+    sync_single_pattern_to_longest_audio_track();
+    mark_dirty();
+}
 uint32_t Engine::lpb() const { return m_timing.lpb(); }
-void Engine::set_lpb(uint32_t l) { m_timing.set_lpb(l); mark_dirty(); }
+void Engine::set_lpb(uint32_t l) {
+    m_timing.set_lpb(l);
+    sync_single_pattern_to_longest_audio_track();
+    mark_dirty();
+}
 
 void Engine::set_record_track(size_t t) {
     if (m_tracks.empty()) {
@@ -1780,6 +1834,7 @@ void Engine::stop_armed_audio_recording(bool commit)
 
     if (changed) {
         refresh_audio_track_sources(*this);
+        sync_single_pattern_to_longest_audio_track();
         mark_dirty();
     }
 }
@@ -2034,6 +2089,7 @@ bool Engine::retrigger_stretch_audio_track(size_t audio_track_index,
     sampler->update_sample_data(sample_index - 1, updated_sample);
 
     refresh_audio_track_sources(*this);
+    sync_single_pattern_to_longest_audio_track();
     mark_dirty();
     return true;
 }

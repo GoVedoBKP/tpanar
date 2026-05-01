@@ -157,6 +157,8 @@ bool Engine::import_audio(const ::std::string& path)
         track(track_index).set_linked_track(-1);
         track(track_index).set_audio_sample_index(1);
         track(track_index).set_instrument(&inst);
+        track(track_index).set_audio_sample_data(sample_data);
+        sync_single_pattern_to_longest_audio_track();
         mark_dirty();
         std::cout << "Imported audio file: " << path << std::endl;
         return true;
