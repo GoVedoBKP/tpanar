@@ -509,8 +509,8 @@ void MixerPanel::update_meters() {
         if (meters.second) meters.second->level(m_engine.track(i).meter_level_r());
     }
 
-    for (size_t i = 0; i < m_engine.bus_count() && i < m_bus_meters.size(); ++i) {
-        auto& meters = m_bus_meters[i];
+    for (size_t i = 1; i < m_engine.bus_count() && (i - 1) < m_bus_meters.size(); ++i) {
+        auto& meters = m_bus_meters[i - 1];
         if (meters.first) meters.first->level(m_engine.bus(i).meter_l());
         if (meters.second) meters.second->level(m_engine.bus(i).meter_r());
     }

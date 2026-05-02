@@ -209,6 +209,11 @@ int WxMainWindow::get_cursor_row() const {
     return 0;
 }
 
+int WxMainWindow::get_tracks_cursor_row() const {
+    if (m_tracks_panel) return m_tracks_panel->get_cursor_row();
+    return 0;
+}
+
 void WxMainWindow::OnTimer(wxTimerEvent& event) {
     if (m_transport) m_transport->update();
     if (m_mixer_panel) m_mixer_panel->update_meters();

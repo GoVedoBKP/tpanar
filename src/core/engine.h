@@ -103,6 +103,7 @@ public:
     void play_song();
     void play_pattern();
     void play_from_position(size_t row);
+    void play_from_absolute_row(size_t absolute_row);
     void auto_seek();
 
     tpanar_ns::Transport& transport();
@@ -135,6 +136,7 @@ public:
     void remove_pattern_from_order(size_t order_pos);
     size_t copy_pattern_in_order(size_t order_pos);
     void sync_single_pattern_to_longest_audio_track();
+    void refresh_timeline_audio_tracks();
     bool auto_split_single_pattern(size_t target_bars);
     bool join_patterns_to_single();
 

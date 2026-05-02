@@ -200,12 +200,12 @@ void tpanar_ns::Track::process(float* out_l,
     std::fill(out_l, out_l + nframes, 0.f);
     std::fill(out_r, out_r + nframes, 0.f);
 
+    if (m_instrument)
+        m_instrument->process(out_l, out_r, nframes);
+
     if (m_audio_voice && m_audio_voice->active()) {
         m_audio_voice->process(out_l, out_r, nframes);
     }
-
-    if (m_instrument)
-        m_instrument->process(out_l, out_r, nframes);
 
     if (in_bufs && m_audio_input_l >= 0) {
         const float* in_l = in_bufs[m_audio_input_l];

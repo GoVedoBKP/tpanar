@@ -280,6 +280,7 @@ void ProjectPanel::update_track_list() {
                     track.set_linked_track(-1);
                 }
             }
+            m_engine.refresh_timeline_audio_tracks();
             m_engine.mark_dirty();
             CallAfter([this]() { update_track_list(); });
         });
@@ -313,6 +314,7 @@ void ProjectPanel::update_track_list() {
             const int sel = link_ch->GetSelection();
             if (sel != wxNOT_FOUND && (size_t)sel < linked_tracks.size()) {
                 m_engine.track(i).set_linked_track(linked_tracks[sel]);
+                m_engine.refresh_timeline_audio_tracks();
                 m_engine.mark_dirty();
             }
         });
@@ -347,6 +349,7 @@ void ProjectPanel::update_track_list() {
             } else {
                 m_engine.track(i).set_instrument(&m_engine.instrument((size_t)instrument_values[sel]));
             }
+            m_engine.refresh_timeline_audio_tracks();
             m_engine.mark_dirty();
             CallAfter([this]() { update_track_list(); });
         });
@@ -386,6 +389,7 @@ void ProjectPanel::update_track_list() {
             const int sel = take_ch->GetSelection();
             if (sel != wxNOT_FOUND && (size_t)sel < take_values.size()) {
                 m_engine.track(i).set_audio_sample_index((uint8_t)take_values[sel]);
+                m_engine.refresh_timeline_audio_tracks();
                 m_engine.mark_dirty();
             }
         });
@@ -441,7 +445,6 @@ void ProjectPanel::update_track_list() {
                 const bool align_to_click = dlg.GetSelection() == 1;
                 if (m_engine.quantize_note_track(i, align_to_click)) {
                     if (m_main_window) m_main_window->update_all_uis();
-                    CallAfter([this]() { update_track_list(); });
                 } else {
                     wxMessageBox("Quantization failed. Ensure the note track contains note events.",
                                  "Quantize", wxOK | wxICON_WARNING);
@@ -449,7 +452,6 @@ void ProjectPanel::update_track_list() {
             } else {
                 if (m_engine.analyze_audio_track(i)) {
                     if (m_main_window) m_main_window->update_all_uis();
-                    CallAfter([this]() { update_track_list(); });
                 } else {
                     wxMessageBox("Analysis failed. Ensure the audio track has a linked note track, a valid take, and detectable drum hits.",
                                  "Analysis", wxOK | wxICON_WARNING);
@@ -806,6 +808,7 @@ void ProjectPanel::on_add_track(wxCommandEvent& event) {
     m_engine.track(audio_track_index).set_linked_track((int)note_track_index);
     m_engine.track(note_track_index).set_linked_track((int)audio_track_index);
 
+    m_engine.refresh_timeline_audio_tracks();
     m_engine.set_audio_track_armed(audio_track_index, true);
     m_engine.set_record_track(note_track_index);
     m_engine.mark_dirty();

@@ -1318,6 +1318,7 @@ void InstrumentPanel::update_editor() {
                     if (i > 0) {
                         static_cast<SampleInstrument*>(&m_engine.instrument(m_selected_instrument))->move_sample(i, i - 1);
                         m_selected_sample = (int)(i - 1);
+                        m_engine.refresh_timeline_audio_tracks();
                         update_editor();
                     }
                 });
@@ -1330,6 +1331,7 @@ void InstrumentPanel::update_editor() {
                     if (i < s->sample_count() - 1) {
                         s->move_sample(i, i + 1);
                         m_selected_sample = (int)(i + 1);
+                        m_engine.refresh_timeline_audio_tracks();
                         update_editor();
                     }
                 });
@@ -1341,6 +1343,7 @@ void InstrumentPanel::update_editor() {
                 rem->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent&){
                     static_cast<SampleInstrument*>(&m_engine.instrument(m_selected_instrument))->remove_sample(i);
                     m_selected_sample = -1;
+                    m_engine.refresh_timeline_audio_tracks();
                     update_editor();
                 });
                 rs->Add(rem, 0, wxALIGN_CENTER_VERTICAL | wxALL, 0);
@@ -1622,6 +1625,7 @@ void InstrumentPanel::on_load(wxCommandEvent& event) {
         m_selected_sample = -1;
     }
 
+    m_engine.refresh_timeline_audio_tracks();
     m_engine.mark_dirty();
     update_instrument_list();
     update_editor();
@@ -1762,6 +1766,7 @@ void InstrumentPanel::on_sample_stop(wxCommandEvent& event) {
             sampler->add_sample("Recorded Sample", m_engine.m_recording_sample_data);
             m_selected_sample = (int)sampler->sample_count() - 1;
         }
+        m_engine.refresh_timeline_audio_tracks();
         update_editor();
     }
 }
@@ -1792,6 +1797,7 @@ void InstrumentPanel::on_sample_fmt(wxCommandEvent& event) {
         if (inst.type() == InstrumentType::Sampler) {
              static_cast<SampleInstrument*>(&inst)->push_undo(m_selected_sample);
              static_cast<SampleInstrument*>(&inst)->convert_sample_format(m_selected_sample, (SampleFormatAction)event.GetSelection());
+             m_engine.refresh_timeline_audio_tracks();
              update_editor();
         }
     }
@@ -1827,6 +1833,7 @@ void InstrumentPanel::on_insert_silence(wxCommandEvent& event) {
                     size_t num_samples = (size_t)(seconds * sample.data->sample_rate);
                     size_t pos = m_waveform_view->selection_start();
                     sample.data->insert_silence(pos, num_samples);
+                    m_engine.refresh_timeline_audio_tracks();
                     update_editor();
                 }
             }
@@ -1852,6 +1859,7 @@ void InstrumentPanel::on_crop(wxCommandEvent& event) {
 
     sampler->push_undo(m_selected_sample);
     sample.data->crop(s1, s2);
+    m_engine.refresh_timeline_audio_tracks();
     m_engine.mark_dirty();
     update_editor();
 }
@@ -1897,6 +1905,7 @@ void InstrumentPanel::on_resample(wxCommandEvent& event) {
 
     sampler->push_undo(m_selected_sample);
     sampler->update_sample_data(m_selected_sample, new_data);
+    m_engine.refresh_timeline_audio_tracks();
     m_engine.mark_dirty();
     update_editor();
 }
@@ -1940,6 +1949,7 @@ void InstrumentPanel::on_time_stretch(wxCommandEvent& event) {
 
     sampler->push_undo(m_selected_sample);
     sampler->update_sample_data(m_selected_sample, new_data);
+    m_engine.refresh_timeline_audio_tracks();
     m_engine.mark_dirty();
     update_editor();
 }
@@ -2048,6 +2058,7 @@ void InstrumentPanel::on_undo(wxCommandEvent& event) {
         auto& inst = m_engine.instrument(m_selected_instrument);
         if (inst.type() == InstrumentType::Sampler) {
             static_cast<SampleInstrument*>(&inst)->undo(m_selected_sample);
+            m_engine.refresh_timeline_audio_tracks();
             update_editor();
         }
     }
@@ -2058,6 +2069,7 @@ void InstrumentPanel::on_redo(wxCommandEvent& event) {
         auto& inst = m_engine.instrument(m_selected_instrument);
         if (inst.type() == InstrumentType::Sampler) {
             static_cast<SampleInstrument*>(&inst)->redo(m_selected_sample);
+            m_engine.refresh_timeline_audio_tracks();
             update_editor();
         }
     }
@@ -2074,6 +2086,7 @@ void InstrumentPanel::cut() {
                 if (s1 == s2) { s1 = 0; s2 = sample.data->left.size(); }
                 else if (s1 > s2) std::swap(s1, s2);
                 m_engine.sample_clipboard().data = std::make_shared<SampleData>(sample.data->cut(s1, s2));
+                m_engine.refresh_timeline_audio_tracks();
                 update_editor();
             }
         }
@@ -2109,6 +2122,7 @@ void InstrumentPanel::paste() {
             if (sample.data) {
                 static_cast<SampleInstrument*>(&inst)->push_undo(m_selected_sample);
                 sample.data->paste_at(m_waveform_view->selection_start(), *m_engine.sample_clipboard().data);
+                m_engine.refresh_timeline_audio_tracks();
                 update_editor();
             }
         }
@@ -2150,6 +2164,7 @@ void InstrumentPanel::on_load_sample(wxCommandEvent& event) {
                 s->set_sample_name(m_selected_sample, dlg.GetFilename().ToStdString());
                 s->get_sample(m_selected_sample).data = data;
             }
+            m_engine.refresh_timeline_audio_tracks();
             m_engine.mark_dirty();
             update_editor();
         }
@@ -2182,6 +2197,7 @@ void InstrumentPanel::on_remove_sample(wxCommandEvent& event) {
         if (inst.type() == InstrumentType::Sampler) {
             static_cast<SampleInstrument*>(&inst)->remove_sample(m_selected_sample);
             m_selected_sample = -1;
+            m_engine.refresh_timeline_audio_tracks();
             update_editor();
         }
     }

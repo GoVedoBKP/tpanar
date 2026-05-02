@@ -925,6 +925,51 @@ void Engine::play_from_position(size_t row) {
     start();
 }
 
+void Engine::play_from_absolute_row(size_t absolute_row) {
+    stop();
+
+    if (m_order.empty()) {
+        m_current_row = 0;
+        m_current_tick = 0;
+        auto_seek();
+        start();
+        return;
+    }
+
+    size_t target_order = 0;
+    size_t target_row = 0;
+    size_t remaining_rows = absolute_row;
+
+    for (; target_order < m_order.size(); ++target_order) {
+        const size_t pat_idx = m_order[target_order];
+        if (pat_idx >= m_patterns.size()) {
+            continue;
+        }
+
+        const size_t pat_rows = m_patterns[pat_idx]->row_count();
+        if (remaining_rows < pat_rows) {
+            target_row = remaining_rows;
+            break;
+        }
+        remaining_rows -= pat_rows;
+    }
+
+    if (target_order >= m_order.size()) {
+        target_order = m_order.size() - 1;
+        const size_t pat_idx = m_order[target_order];
+        target_row = (pat_idx < m_patterns.size() && m_patterns[pat_idx]->row_count() > 0)
+            ? (m_patterns[pat_idx]->row_count() - 1)
+            : 0;
+    }
+
+    m_order_pos.store(target_order);
+    set_active_pattern(m_order[target_order]);
+    m_current_row = target_row;
+    m_current_tick = 0;
+    auto_seek();
+    start();
+}
+
 void Engine::set_play_position(size_t order_pos, size_t row) {
     bool was_playing = is_playing();
     bool was_looping = transport().m_loop_pattern.load();
@@ -1862,6 +1907,30 @@ void Engine::sync_single_pattern_to_longest_audio_track()
         m_current_row = pat.row_count() - 1;
     }
     mark_dirty();
+}
+
+void Engine::refresh_timeline_audio_tracks()
+{
+    for (size_t i = 0; i < m_tracks.size(); ++i) {
+        if (!is_timeline_sample_track(*this, i)) continue;
+
+        Track& track = m_tracks[i];
+        auto* sampler = static_cast<SampleInstrument*>(track.instrument());
+        const size_t sample_count = sampler ? sampler->sample_count() : 0;
+        if (sample_count == 0) {
+            track.set_audio_sample_index(0);
+            continue;
+        }
+
+        size_t sample_index = track.audio_sample_index();
+        if (sample_index == 0) sample_index = 1;
+        if (sample_index > sample_count) {
+            track.set_audio_sample_index((uint8_t)sample_count);
+        }
+    }
+
+    refresh_audio_track_sources(*this);
+    sync_single_pattern_to_longest_audio_track();
 }
 
 bool Engine::auto_split_single_pattern(size_t target_bars)

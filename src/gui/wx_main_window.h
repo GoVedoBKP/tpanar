@@ -51,6 +51,8 @@ public:
 
     Track& track(size_t index);
     int get_cursor_row() const;
+    int selected_tab() const { return m_selected_tab; }
+    int get_tracks_cursor_row() const;
 
     void OnTimer(wxTimerEvent& event);
     void OnClose(wxCloseEvent& event);

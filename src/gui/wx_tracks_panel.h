@@ -34,6 +34,7 @@ class TracksPanel : public wxPanel {
 public:
     TracksPanel(wxWindow* parent, Engine& engine);
     void update();
+    int get_cursor_row() const;
 
 public:
     void set_tab_index(int idx) { m_tab_index = idx; }
@@ -103,6 +104,7 @@ public:
     void do_retrigger_stretch_whole_track();
     void do_undo();
     void do_redo();
+    int cursor_row() const { return m_sel_start_tick >= 0 ? m_sel_start_tick : 0; }
 
 private:
     int tick_to_x(int tick);

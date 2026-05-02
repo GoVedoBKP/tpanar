@@ -26,6 +26,7 @@
 
 #include <wx/sizer.h>
 #include <wx/statline.h>
+#include <algorithm>
 #include <cstdio>
 
 namespace tpanar_ns {
@@ -174,7 +175,20 @@ TransportBar::TransportBar(wxWindow* parent, wxWindowID id, Engine& engine)
 }
 
 void TransportBar::on_play(wxCommandEvent& event) {
-    m_engine.play();
+    if (m_engine.transport_state() != TransportState::Stopped) {
+        m_engine.play();
+        return;
+    }
+
+    WxMainWindow* main_win = dynamic_cast<WxMainWindow*>(GetParent());
+    if (main_win && main_win->selected_tab() == 2) {
+        const int cursor_row = std::max(0, main_win->get_tracks_cursor_row());
+        m_engine.play_from_absolute_row((size_t)cursor_row);
+        return;
+    }
+
+    m_engine.auto_seek();
+    m_engine.start();
 }
 
 void TransportBar::on_stop(wxCommandEvent& event) {
@@ -230,7 +244,10 @@ void TransportBar::update() {
     if (state == TransportState::Stopped) {
         WxMainWindow* main_win = dynamic_cast<WxMainWindow*>(GetParent());
         if (main_win) {
-            total_seconds = m_engine.get_time_at_row(main_win->get_cursor_row());
+            const int row = (main_win->selected_tab() == 2)
+                ? main_win->get_tracks_cursor_row()
+                : main_win->get_cursor_row();
+            total_seconds = m_engine.get_time_at_row((size_t)std::max(0, row));
         } else {
             total_seconds = m_engine.get_current_time_seconds();
         }

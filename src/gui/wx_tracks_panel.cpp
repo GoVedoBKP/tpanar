@@ -756,6 +756,10 @@ TracksPanel::TracksPanel(wxWindow* parent, Engine& engine)
     SetSizer(main_sizer);
 }
 
+int TracksPanel::get_cursor_row() const {
+    return m_tracks_view ? m_tracks_view->cursor_row() : 0;
+}
+
 void TracksPanel::update() {
     static int last_total_ticks = -1;
     static int last_track_count = -1;
@@ -1586,6 +1590,7 @@ void TracksView::do_cut() {
         m_engine.track_clipboard().set_audio_group(clips);
     }
     if (changed) {
+        m_engine.refresh_timeline_audio_tracks();
         update_view();
         Refresh();
     }
@@ -1652,6 +1657,7 @@ void TracksView::do_paste() {
     }
 
     if (changed) {
+        m_engine.refresh_timeline_audio_tracks();
         update_view();
         Refresh();
     }
@@ -1680,6 +1686,7 @@ void TracksView::do_silence() {
     }
 
     if (changed) {
+        m_engine.refresh_timeline_audio_tracks();
         Refresh();
     }
 }
@@ -1711,6 +1718,7 @@ void TracksView::do_insert_silence() {
     }
 
     if (changed) {
+        m_engine.refresh_timeline_audio_tracks();
         update_view();
         Refresh();
     }
