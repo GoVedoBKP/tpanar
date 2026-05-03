@@ -107,6 +107,35 @@ wxString pan_status_label(float pan)
     return wxString::Format("%c%d", pan < 0.0f ? 'L' : 'R', amount);
 }
 
+double sample_frames_per_row(const Engine& engine, uint32_t sample_rate)
+{
+    const double engine_samples_per_row =
+        (engine.lpb() > 0 && engine.tempo() > 0.0)
+            ? (((double)engine.sample_rate() * 60.0) / engine.tempo()) / (double)engine.lpb()
+            : (double)engine.sample_rate();
+    const double resolved_sample_rate = sample_rate > 0 ? (double)sample_rate : (double)engine.sample_rate();
+    return engine_samples_per_row * (resolved_sample_rate / (double)engine.sample_rate());
+}
+
+size_t sample_frame_count(const SampleData& sample)
+{
+    return std::max(sample.left.size(), sample.right.size());
+}
+
+int sample_rows_for_display(const Engine& engine, const SampleData& sample)
+{
+    const double frames_per_row = sample_frames_per_row(engine, sample.sample_rate);
+    if (frames_per_row <= 0.0) return 0;
+    return (int)std::ceil((double)sample_frame_count(sample) / frames_per_row);
+}
+
+size_t sample_frames_for_display_rows(const Engine& engine, const SampleData& sample, double rows)
+{
+    const double frames_per_row = sample_frames_per_row(engine, sample.sample_rate);
+    if (frames_per_row <= 0.0 || rows <= 0.0) return 0;
+    return std::min(sample.left.size(), (size_t)std::llround(rows * frames_per_row));
+}
+
 void draw_header_button(wxDC& dc,
                         const wxRect& rect,
                         const wxString& label,
@@ -1147,10 +1176,11 @@ void TracksView::draw(wxDC& dc) {
                 if (sample_idx < sampler->sample_count()) {
                     const auto& sample = sampler->get_sample(sample_idx);
                     if (sample.data) {
-                        int nw = tick_to_x((int)std::ceil((double)sample.data->left.size() / samples_per_row));
+                        const int sample_rows = sample_rows_for_display(m_engine, *sample.data);
+                        int nw = tick_to_x(sample_rows);
                         if (nw < 2) nw = 2;
-                        const size_t samples_to_draw =
-                            std::min(sample.data->left.size(), (size_t)((double)nw / m_zoom * samples_per_row));
+                        const size_t samples_to_draw = sample_frames_for_display_rows(
+                            m_engine, *sample.data, (double)nw / m_zoom);
                         dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                         dc.DrawRectangle(header_w, ty + 5, nw, track_h_actual - 10);
@@ -1199,14 +1229,13 @@ void TracksView::draw(wxDC& dc) {
                                     if (s_idx < sampler->sample_count()) {
                                         auto& sample = sampler->get_sample(s_idx);
                                         if (sample.data) {
-                                            double sample_duration_rows = (double)sample.data->left.size() / samples_per_row;
                                             int nw_limit = tick_to_x(note_len);
-                                            int nw_sample = tick_to_x(sample_duration_rows);
+                                            int nw_sample = tick_to_x(sample_rows_for_display(m_engine, *sample.data));
                                             int nw = std::min(nw_limit, nw_sample);
                                             if (nw < 2) nw = 2;
 
-                                            size_t samples_to_draw = (size_t)((double)nw / m_zoom * samples_per_row);
-                                            samples_to_draw = std::min(samples_to_draw, sample.data->left.size());
+                                            const size_t samples_to_draw =
+                                                sample_frames_for_display_rows(m_engine, *sample.data, (double)nw / m_zoom);
 
                                             // Detect overlaps
                                             auto overlaps = detect_overlaps(sampler);
