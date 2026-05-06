@@ -552,8 +552,10 @@ std::shared_ptr<SampleData> tpanar_ns::Track::finish_audio_capture()
     if (!m_capture_sample_data) return nullptr;
 
     m_capture_sample_data->left.resize(recorded);
+    m_capture_sample_data->left.shrink_to_fit();
     if (m_capture_stereo) {
         m_capture_sample_data->right.resize(recorded);
+        m_capture_sample_data->right.shrink_to_fit();
     } else {
         m_capture_sample_data->right.clear();
     }

@@ -691,25 +691,29 @@ bool paste_clip_into_track(Engine& engine,
 
 } // namespace
 
-static void draw_waveform_helper(wxDC& dc, int x, int y, int w, int h, const SampleData& data, const wxColour& col, size_t max_samples = 0) {
+static void draw_waveform_helper(wxDC& dc, int x, int y, int w, int h, const SampleData& data,
+                                 const wxColour& col, size_t max_samples = 0,
+                                 size_t sample_start = 0) {
     if (data.left.empty() || w <= 0) return;
     dc.SetPen(wxPen(col));
     
     bool is_stereo = !data.right.empty();
     int ch_h = is_stereo ? h / 2 : h;
 
-    size_t data_len = (max_samples > 0) ? std::min(max_samples, data.left.size()) : data.left.size();
+    const size_t data_end = (max_samples > 0) ? std::min(max_samples, data.left.size()) : data.left.size();
+    if (data_end <= sample_start) return;
+    const size_t data_len = data_end - sample_start;
     if (data_len == 0) return;
 
     auto draw_channel = [&](const std::vector<float>& ch_data, int ch_y) {
         int mid_y = ch_y + ch_h / 2;
         double samples_per_pixel = (double)data_len / w;
         for (int i = 0; i < w; ++i) {
-            size_t start = (size_t)(i * samples_per_pixel);
-            size_t end = (size_t)((i + 1) * samples_per_pixel);
-            if (end > data_len) end = data_len;
+            size_t start = sample_start + (size_t)(i * samples_per_pixel);
+            size_t end   = sample_start + (size_t)((i + 1) * samples_per_pixel);
+            if (end > data_end) end = data_end;
             if (start >= end) {
-                if (start < data_len) {
+                if (start < data_end) {
                     int amp = (int)(ch_data[start] * (ch_h / 2 - 2));
                     dc.DrawLine(x + i, mid_y - amp, x + i, mid_y + amp);
                 }
@@ -1296,17 +1300,25 @@ void TracksView::draw(wxDC& dc) {
                     const auto& sample = sampler->get_sample(sample_idx);
                     if (sample.data) {
                         const int sample_rows = sample_rows_for_display(m_engine, *sample.data);
-                        int nw = tick_to_x(sample_rows);
-                        if (nw < 2) nw = 2;
-                        const size_t samples_to_draw = sample_frames_for_display_rows(
-                            m_engine, *sample.data, (double)nw / m_zoom);
+                        const int full_nw = std::max(2, tick_to_x(sample_rows));
+                        // Viewport clip: only draw the visible horizontal slice
+                        const int skip_px = std::max(0, view_x - header_w);
+                        const int vis_x   = header_w + skip_px;
+                        const int vis_w   = std::min(full_nw - skip_px, view_right - vis_x);
+                        // Background rectangle (full width for correct appearance)
                         dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                        dc.DrawRectangle(header_w, ty + 5, nw, track_h_actual - 10);
-                        draw_waveform_helper(dc, header_w, ty + 5, nw, track_h_actual - 10,
-                                             *sample.data,
-                                             ThemeManager::toWxColour(m_engine.m_tracker_note),
-                                             samples_to_draw);
+                        dc.DrawRectangle(header_w, ty + 5, full_nw, track_h_actual - 10);
+                        if (vis_w > 0) {
+                            // Compute which samples correspond to the visible slice
+                            const double spp = samples_per_row / m_zoom; // samples per pixel
+                            const size_t s_start = (size_t)(skip_px * spp);
+                            const size_t s_end   = s_start + (size_t)(vis_w * spp) + 2;
+                            draw_waveform_helper(dc, vis_x, ty + 5, vis_w, track_h_actual - 10,
+                                                 *sample.data,
+                                                 ThemeManager::toWxColour(m_engine.m_tracker_note),
+                                                 s_end, s_start);
+                        }
                     }
                 }
 
@@ -1315,15 +1327,23 @@ void TracksView::draw(wxDC& dc) {
                     SampleData* live_sd = track_obj.capture_data();
                     const size_t wp = track_obj.capture_write_pos();
                     if (live_sd && wp > 0 && samples_per_row > 0.0) {
-                        const int rec_x = header_w + tick_to_x(m_recording_start_tick);
-                        const int live_w = std::max(2, (int)((double)wp / samples_per_row * m_zoom));
-                        // Red shaded background for the recording region
+                        const int rec_x     = header_w + tick_to_x(m_recording_start_tick);
+                        const int full_lw   = std::max(2, (int)((double)wp / samples_per_row * m_zoom));
+                        // Viewport clip
+                        const int l_skip_px = std::max(0, view_x - rec_x);
+                        const int l_vis_x   = rec_x + l_skip_px;
+                        const int l_vis_w   = std::min(full_lw - l_skip_px, view_right - l_vis_x);
+                        // Background shade
                         dc.SetBrush(wxBrush(wxColour(120, 20, 20, 80)));
                         dc.SetPen(*wxTRANSPARENT_PEN);
-                        dc.DrawRectangle(rec_x, ty + 5, live_w, track_h_actual - 10);
-                        // Live waveform in bright red
-                        draw_waveform_helper(dc, rec_x, ty + 5, live_w, track_h_actual - 10,
-                                             *live_sd, wxColour(255, 80, 80), wp);
+                        dc.DrawRectangle(rec_x, ty + 5, full_lw, track_h_actual - 10);
+                        if (l_vis_w > 0) {
+                            const double spp    = samples_per_row / m_zoom;
+                            const size_t l_s0   = (size_t)(l_skip_px * spp);
+                            const size_t l_send = std::min(wp, l_s0 + (size_t)(l_vis_w * spp) + 2);
+                            draw_waveform_helper(dc, l_vis_x, ty + 5, l_vis_w, track_h_actual - 10,
+                                                 *live_sd, wxColour(255, 80, 80), l_send, l_s0);
+                        }
                     }
                 }
                 continue;
