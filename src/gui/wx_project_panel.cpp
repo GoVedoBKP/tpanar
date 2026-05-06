@@ -196,7 +196,7 @@ void ProjectPanel::update_metadata() {
 void ProjectPanel::update_track_list() {
     m_track_container->DestroyChildren();
 
-    wxFlexGridSizer* grid_sizer = new wxFlexGridSizer(0, 14, 5, 5);
+    wxFlexGridSizer* grid_sizer = new wxFlexGridSizer(0, 15, 5, 5);
     grid_sizer->AddGrowableCol(1); // Track name should grow
 
     size_t num_tracks = m_engine.track_count();
@@ -221,6 +221,7 @@ void ProjectPanel::update_track_list() {
     grid_sizer->Add(make_hdr("Drum",       "Audio-track drum role for later analysis, using GM drum names and typical frequency ranges"), 0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
     grid_sizer->Add(make_hdr("Action"),    0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
     grid_sizer->Add(make_hdr("Output"),    0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
+    grid_sizer->Add(make_hdr("Input",      "Audio input source for recording (audio tracks only)"), 0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
     grid_sizer->Add(make_hdr("V\u00b1",   "Velocity humanization: \u00b1 spread in units (0 = off, SoundFont/SFZ only)"), 0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
     grid_sizer->Add(make_hdr("T ms",       "Timing humanization: max random onset delay in ms (0 = off, SoundFont/SFZ only)"), 0, wxALIGN_CENTER_VERTICAL | wxALL, 2);
     grid_sizer->AddSpacer(1); // up
@@ -487,6 +488,45 @@ void ProjectPanel::update_track_list() {
         out_ch->Enable(!is_tempo_track);
         grid_sizer->Add(out_ch, 0, wxEXPAND | wxALL, 2);
 
+        // Column 9: Audio Input Choice (audio tracks only)
+        {
+            const bool is_audio = track_obj.kind() == TrackKind::Audio;
+            wxChoice* in_ch = new wxChoice(m_track_container, wxID_ANY);
+            // Build option list: (ch_l, ch_r) pairs
+            std::vector<std::pair<int,int>> in_values;
+            in_ch->Append("None");
+            in_values.push_back({-1, -1});
+            uint32_t num_ins = m_engine.m_num_ins;
+            for (uint32_t ch = 0; ch < num_ins; ++ch) {
+                in_ch->Append(wxString::Format("Ch %u", ch + 1));
+                in_values.push_back({(int)ch, -1});
+            }
+            for (uint32_t ch = 0; ch + 1 < num_ins; ch += 2) {
+                in_ch->Append(wxString::Format("St %u/%u", ch + 1, ch + 2));
+                in_values.push_back({(int)ch, (int)(ch + 1)});
+            }
+            // Select current value
+            int cur_l = -1, cur_r = -1;
+            track_obj.get_audio_input(cur_l, cur_r);
+            int in_sel = 0;
+            for (size_t k = 0; k < in_values.size(); ++k) {
+                if (in_values[k].first == cur_l && in_values[k].second == cur_r) {
+                    in_sel = (int)k;
+                    break;
+                }
+            }
+            in_ch->Select(in_sel);
+            in_ch->Enable(is_audio && !is_tempo_track);
+            in_ch->Bind(wxEVT_CHOICE, [this, i, in_ch, in_values](wxCommandEvent&) {
+                int sel = in_ch->GetSelection();
+                if (sel >= 0 && (size_t)sel < in_values.size()) {
+                    m_engine.track(i).set_audio_input(in_values[sel].first, in_values[sel].second);
+                    m_engine.mark_dirty();
+                }
+            });
+            grid_sizer->Add(in_ch, 0, wxEXPAND | wxALL, 2);
+        }
+
         Instrument* inst_ptr = track_obj.instrument();
 
         // Columns 9, 10: Velocity & timing humanization - active only for note tracks with SoundFont/SFZ
@@ -617,7 +657,9 @@ void ProjectPanel::update_track_list() {
             }
         });
         grid_sizer->Add(out_ch, 0, wxEXPAND | wxALL, 2);
-        // Columns 9, 10: Spacers (humanization - N/A for buses)
+        // Column 9: Spacer (input - N/A for buses)
+        grid_sizer->AddSpacer(10);
+        // Columns 10, 11: Spacers (humanization - N/A for buses)
         grid_sizer->AddSpacer(10);
         grid_sizer->AddSpacer(10);
 
