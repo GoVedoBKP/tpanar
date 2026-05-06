@@ -1,6 +1,7 @@
 #include "wx_spectral_view.h"
 #include "../core/engine.h"
 #include <wx/dcclient.h>
+#include <wx/dcbuffer.h>
 #include <cmath>
 #include <algorithm>
 
@@ -14,6 +15,7 @@ SpectralView::SpectralView(wxWindow* parent, wxWindowID id, Engine& engine)
     : wxPanel(parent, id), m_engine(engine)
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
+    SetDoubleBuffered(true);
     m_fft_size = 2048;
     m_analyzer = std::make_unique<FFTAnalyzer>(m_fft_size);
     m_fft_input.resize(m_fft_size, 0.0f);
@@ -61,7 +63,7 @@ void SpectralView::update() {
 }
 
 void SpectralView::OnPaint(wxPaintEvent& event) {
-    wxPaintDC dc(this);
+    wxAutoBufferedPaintDC dc(this);
     wxSize size = GetClientSize();
     int w = size.GetWidth();
     int h = size.GetHeight();

@@ -19,6 +19,7 @@
 #include <wx/app.h>
 #include <wx/artprov.h>
 #include <wx/dcclient.h>
+#include <wx/dcbuffer.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include "wx_tracks_panel.h"
@@ -41,13 +42,16 @@ namespace tpanar_ns {
 
 namespace {
 
-constexpr int kTrackHeaderWidth = 290;
+constexpr int kTrackHeaderWidth = 320;
 constexpr int kMinimizeButtonX = 5;
 constexpr int kMinimizeButtonW = 20;
-constexpr int kControlButtonW = 30;
-constexpr int kControlButtonH = 24;
-constexpr int kControlButtonGap = 10;
-constexpr int kControlRowX = 40;
+constexpr int kControlButtonW = 28;
+constexpr int kControlButtonH = 20;
+constexpr int kControlButtonGapX = 6;
+constexpr int kControlButtonGapY = 4;
+constexpr int kControlRightMargin = 10;
+constexpr int kHeaderTextX = 30;
+constexpr int kHeaderTextRightPadding = 10;
 
 enum class HeaderControl {
     Minimize,
@@ -80,23 +84,33 @@ bool has_record_arm(const Engine& engine, int track_idx)
 wxRect control_rect(int track_y, int track_h, HeaderControl control, bool has_record)
 {
     if (control == HeaderControl::Minimize) {
-        return wxRect(kMinimizeButtonX, track_y + (track_h - 18) / 2, kMinimizeButtonW, 18);
+        return wxRect(kMinimizeButtonX, track_y + 6, kMinimizeButtonW, 18);
     }
 
-    int index = 0;
+    int row = 0;
+    int col = 0;
+    int row_cols = 0;
     switch (control) {
-        case HeaderControl::Mute:    index = 0; break;
-        case HeaderControl::Solo:    index = 1; break;
-        case HeaderControl::Record:  index = 2; break;
-        case HeaderControl::VolDown: index = has_record ? 3 : 2; break;
-        case HeaderControl::VolUp:   index = has_record ? 4 : 3; break;
-        case HeaderControl::PanLeft: index = has_record ? 5 : 4; break;
-        case HeaderControl::PanRight:index = has_record ? 6 : 5; break;
+        case HeaderControl::Mute:
+            row = 0; col = 0; row_cols = has_record ? 3 : 2; break;
+        case HeaderControl::Solo:
+            row = 0; col = 1; row_cols = has_record ? 3 : 2; break;
+        case HeaderControl::Record:
+            row = 0; col = 2; row_cols = 3; break;
+        case HeaderControl::VolDown:
+            row = 1; col = 0; row_cols = 4; break;
+        case HeaderControl::VolUp:
+            row = 1; col = 1; row_cols = 4; break;
+        case HeaderControl::PanLeft:
+            row = 1; col = 2; row_cols = 4; break;
+        case HeaderControl::PanRight:
+            row = 1; col = 3; row_cols = 4; break;
         case HeaderControl::Minimize: break;
     }
 
-    const int row_y = track_y + track_h - kControlButtonH - 6;
-    const int x = kControlRowX + index * (kControlButtonW + kControlButtonGap);
+    const int row_width = row_cols * kControlButtonW + std::max(0, row_cols - 1) * kControlButtonGapX;
+    const int x = kTrackHeaderWidth - kControlRightMargin - row_width + col * (kControlButtonW + kControlButtonGapX);
+    const int row_y = track_y + 8 + row * (kControlButtonH + kControlButtonGapY);
     return wxRect(x, row_y, kControlButtonW, kControlButtonH);
 }
 
@@ -105,6 +119,30 @@ wxString pan_status_label(float pan)
     if (std::fabs(pan) < 0.05f) return "C";
     const int amount = (int)std::round(std::fabs(pan) * 100.0f);
     return wxString::Format("%c%d", pan < 0.0f ? 'L' : 'R', amount);
+}
+
+wxString fit_header_text(wxDC& dc, const wxString& text, int max_width)
+{
+    if (max_width <= 0 || text.empty()) return wxString();
+    if (dc.GetTextExtent(text).GetWidth() <= max_width) return text;
+
+    static const wxString ellipsis = "...";
+    wxString fitted = text;
+    while (!fitted.empty() &&
+           dc.GetTextExtent(fitted + ellipsis).GetWidth() > max_width) {
+        fitted.RemoveLast();
+    }
+    return fitted.empty() ? ellipsis : fitted + ellipsis;
+}
+
+wxString track_kind_label(TrackKind kind)
+{
+    switch (kind) {
+        case TrackKind::Note:  return "Note";
+        case TrackKind::Audio: return "Audio";
+        case TrackKind::Pilot: return "Pilot";
+    }
+    return "Track";
 }
 
 double sample_frames_per_row(const Engine& engine, uint32_t sample_rate)
@@ -792,14 +830,32 @@ int TracksPanel::get_cursor_row() const {
 void TracksPanel::update() {
     static int last_total_ticks = -1;
     static int last_track_count = -1;
+    static size_t last_order_pos = SIZE_MAX;
+    static int last_row = -1;
+    static int last_transport = -1;
+
     int current_total = m_tracks_view->get_total_ticks();
     int current_tracks = (int)m_engine.track_count();
+    size_t current_pos = m_engine.current_order_pos();
+    int current_row = (int)m_engine.current_row();
+    int current_transport = (int)m_engine.transport_state();
+
     if (current_total != last_total_ticks || current_tracks != last_track_count) {
-        m_tracks_view->update_view();
+        m_tracks_view->update_view();  // update_view() calls Refresh() internally
         last_total_ticks = current_total;
         last_track_count = current_tracks;
+        last_order_pos = current_pos;
+        last_row = current_row;
+        last_transport = current_transport;
+        return;
     }
-    m_tracks_view->Refresh();
+
+    if (current_pos != last_order_pos || current_row != last_row || current_transport != last_transport) {
+        last_order_pos = current_pos;
+        last_row = current_row;
+        last_transport = current_transport;
+        m_tracks_view->Refresh();
+    }
 }
 
 void TracksPanel::on_zoom_in(wxCommandEvent& event) { m_tracks_view->zoom_in(); }
@@ -959,16 +1015,28 @@ void TracksView::toggle_track_selection(int track_idx)
 }
 
 void TracksView::OnPaint(wxPaintEvent& event) {
-    wxPaintDC dc(this);
+    wxAutoBufferedPaintDC dc(this);
     PrepareDC(dc);
     draw(dc);
 }
 
 void TracksView::draw(wxDC& dc) {
+    // Compute the visible logical area once for culling throughout this draw pass
+    int vsx, vsy;
+    GetViewStart(&vsx, &vsy);
+    int sux, suy;
+    GetScrollPixelsPerUnit(&sux, &suy);
+    const int view_x = vsx * sux;
+    const int view_y = vsy * suy;
+    wxSize csize = GetClientSize();
+    const int view_right  = view_x + csize.GetWidth();
+    const int view_bottom = view_y + csize.GetHeight();
+
+    wxSize virtual_size = GetVirtualSize();
     dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_bg)));
     dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_bg)));
-    wxSize virtual_size = GetVirtualSize();
-    dc.DrawRectangle(0, 0, virtual_size.GetWidth(), virtual_size.GetHeight());
+    // Only clear the visible portion to avoid unnecessary work on the full virtual canvas
+    dc.DrawRectangle(view_x, view_y, csize.GetWidth(), csize.GetHeight());
 
     int track_h = 80;
     int header_w = kTrackHeaderWidth;
@@ -979,7 +1047,7 @@ void TracksView::draw(wxDC& dc) {
     // Draw Time Scale (Header)
     dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
     dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-    dc.DrawRectangle(header_w, 0, virtual_size.GetWidth() - header_w, 20);
+    dc.DrawRectangle(header_w, 0, view_right - header_w, 20);
 
     dc.SetTextForeground(ThemeManager::toWxColour(m_engine.m_tracker_text));
     wxFont header_font(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
@@ -993,13 +1061,19 @@ void TracksView::draw(wxDC& dc) {
         auto& pat = m_engine.pattern(order[i]);
         int pat_rows = (int)pat.row_count();
         int px = header_w + tick_to_x(total_rows);
+        int pat_end_x = px + tick_to_x(pat_rows);
 
-        // Calculate playhead position
+        // Calculate playhead position (must run even when pattern is off-screen)
         if (i < current_pos) {
             play_tick += pat_rows;
         } else if (i == current_pos) {
             play_tick += (int)m_engine.current_row();
         }
+
+        total_rows += pat_rows;
+
+        // Skip drawing this pattern if it is entirely outside the visible horizontal range
+        if (pat_end_x <= view_x || px >= view_right) continue;
 
         // Pattern boundary
         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
@@ -1015,6 +1089,7 @@ void TracksView::draw(wxDC& dc) {
         if (lpb > 0) {
             for (int r = 0; r < pat_rows; r += lpb) {
                 int bx = px + tick_to_x(r);
+                if (bx < view_x || bx >= view_right) continue;
                 dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                 dc.DrawLine(bx, 15, bx, 25);
                 if (r % (lpb * 4) == 0) {
@@ -1024,8 +1099,6 @@ void TracksView::draw(wxDC& dc) {
                 }
             }
         }
-
-        total_rows += pat_rows;
     }
 
     // Draw Tracks
@@ -1036,6 +1109,13 @@ void TracksView::draw(wxDC& dc) {
     double samples_per_row = (lpb > 0) ? (samples_per_beat / lpb) : 44100.0;
 
     for (int t = 0; t < num_tracks; ++t) {
+        int track_h_actual = get_track_height(t);
+        int ty = cur_y;
+        cur_y += track_h_actual;
+
+        // Skip tracks that are entirely outside the visible vertical range
+        if (ty + track_h_actual <= view_y || ty >= view_bottom) continue;
+
         auto& track_obj = m_engine.track(t);
         const int content_track_idx = resolve_content_track_index(t);
         Track* content_track = content_track_idx >= 0 ? &m_engine.track(content_track_idx) : nullptr;
@@ -1045,9 +1125,6 @@ void TracksView::draw(wxDC& dc) {
             (track_obj.kind() == TrackKind::Audio || track_obj.kind() == TrackKind::Pilot) &&
             content_inst &&
             content_inst->type() == InstrumentType::Sampler;
-        int track_h_actual = get_track_height(t);
-        int ty = cur_y;
-        cur_y += track_h_actual;
 
         // Track Header
         wxColour header_bg = ThemeManager::toWxColour(m_engine.m_bg_color);
@@ -1080,44 +1157,42 @@ void TracksView::draw(wxDC& dc) {
         wxFont bold_font(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
         dc.SetFont(bold_font);
         dc.SetTextForeground(ThemeManager::toWxColour(m_engine.m_fg_color));
-        wxString name = track_obj.name().substr(0, 18);
-        dc.DrawText(name, 30, ty + 5);
+        const bool track_has_controls = !track_obj.is_minimized() && has_track_header_controls(m_engine, t);
+        const bool track_has_record = track_has_controls && has_record_arm(m_engine, t);
+        int text_max_width = header_w - kHeaderTextX - kHeaderTextRightPadding;
+        if (track_has_controls) {
+            text_max_width =
+                std::max(40, control_rect(ty, track_h_actual, HeaderControl::VolDown, track_has_record).GetLeft() -
+                                 kHeaderTextX - kHeaderTextRightPadding);
+        }
+        wxString name = fit_header_text(dc, track_obj.name(), text_max_width);
+        dc.DrawText(name, kHeaderTextX, ty + 5);
 
         // Instrument Info (only shown when not minimized)
         if (!track_obj.is_minimized()) {
             wxFont normal_font(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
             dc.SetFont(normal_font);
             dc.SetTextForeground(ThemeManager::toWxColour(m_engine.m_tracker_text));
-            const char* kind_str = "";
-            switch (track_obj.kind()) {
-                case TrackKind::Note:  kind_str = "[Note]"; break;
-                case TrackKind::Audio: kind_str = "[Audio]"; break;
-                case TrackKind::Pilot: kind_str = "[Pilot]"; break;
-            }
-
-            wxString info_line = kind_str;
-            if (track_obj.kind() == TrackKind::Audio && content_track_idx >= 0 && content_track_idx != t) {
-                info_line.Printf("[Audio -> TRK %d]", content_track_idx);
-            }
-
+            wxString info_line = track_kind_label(track_obj.kind());
             if (content_inst) {
-                wxString inst_name = content_inst->name().substr(0, 20);
-                dc.DrawText(inst_name, 30, ty + 20);
+                info_line += " / " + content_inst->name();
             }
+            dc.DrawText(fit_header_text(dc, info_line, text_max_width), kHeaderTextX, ty + 24);
 
-            wxString status_line = wxString::Format("%s  Vol %d%%  Pan %s",
-                                                    info_line,
+            wxString status_line = wxString::Format("Vol %d%%  Pan %s",
                                                     (int)std::round(track_obj.volume() * 100.0f),
                                                     pan_status_label(track_obj.get_pan()));
+            if (track_obj.kind() == TrackKind::Audio && content_track_idx >= 0 && content_track_idx != t) {
+                status_line += wxString::Format("  Link T%d", content_track_idx);
+            }
             if (track_obj.muted()) status_line += "  M";
             if (track_obj.solo())  status_line += "  S";
             if (has_record_arm(m_engine, t) && m_engine.is_audio_track_armed((size_t)t)) {
                 status_line += m_engine.is_recording_audio_tracks() ? "  REC*" : "  REC";
             }
-            dc.DrawText(status_line, 30, ty + 36);
+            dc.DrawText(fit_header_text(dc, status_line, text_max_width), kHeaderTextX, ty + 56);
 
-            if (has_track_header_controls(m_engine, t)) {
-                const bool track_has_record = has_record_arm(m_engine, t);
+            if (track_has_controls) {
                 const wxColour fg = ThemeManager::toWxColour(m_engine.m_fg_color);
                 const wxColour base = ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight);
                 const wxColour active = ThemeManager::toWxColour(m_engine.m_tracker_cursor);
@@ -1151,10 +1226,15 @@ void TracksView::draw(wxDC& dc) {
                     auto& pat = m_engine.pattern(pat_idx);
                     const int pat_rows = (int)pat.row_count();
                     const int px = header_w + tick_to_x(rows_done);
+                    const int pat_end_x = px + tick_to_x(pat_rows);
+                    rows_done += pat_rows;
+
+                    if (pat_end_x <= view_x || px >= view_right) continue;
 
                     if (lpb > 0) {
                         for (int r = 0; r < pat_rows; r += lpb) {
                             const int click_x = px + tick_to_x(r);
+                            if (click_x < view_x || click_x >= view_right) continue;
                             const bool accented = (r % (lpb * 4)) == 0;
                             wxColour guide = ThemeManager::toWxColour(
                                 accented ? m_engine.m_tracker_cursor : m_engine.m_tracker_lpb_highlight);
@@ -1163,8 +1243,6 @@ void TracksView::draw(wxDC& dc) {
                             dc.DrawLine(click_x, ty + 5, click_x, ty + track_h_actual - 6);
                         }
                     }
-
-                    rows_done += pat_rows;
                 }
                 continue;
             }
@@ -1194,22 +1272,36 @@ void TracksView::draw(wxDC& dc) {
             }
 
             const int pattern_track_idx = content_track_idx >= 0 ? content_track_idx : t;
+            // Pre-compute overlaps once per track (not inside the per-note inner loop)
+            std::vector<AudioRegion> cached_overlaps;
+            if (content_inst && content_inst->type() == InstrumentType::Sampler) {
+                SampleInstrument* sampler = static_cast<SampleInstrument*>(content_inst);
+                cached_overlaps = detect_overlaps(sampler);
+            }
             int rows_done = 0;
             for (auto pat_idx : order) {
                 auto& pat = m_engine.pattern(pat_idx);
                 int pat_rows = (int)pat.row_count();
                 int px = header_w + tick_to_x(rows_done);
+                int pat_end_x = px + tick_to_x(pat_rows);
+                rows_done += pat_rows;
+
+                // Skip patterns entirely outside the visible horizontal range
+                if (pat_end_x <= view_x || px >= view_right) continue;
 
                 size_t num_cols = pat.column_count(pattern_track_idx);
                 for (int r = 0; r < pat_rows; ++r) {
+                    int nx = px + tick_to_x(r);
+                    if (nx >= view_right) break;  // All subsequent rows are also off-screen
+
                     for (size_t c = 0; c < num_cols; ++c) {
                         const auto& ev = pat.event(pattern_track_idx, r, c);
                         if (ev.note != 255) {
-                            int nx = px + tick_to_x(r);
-
                             if (ev.note == 254) { // Note Off
-                                dc.SetPen(wxPen(wxColour(255, 100, 100)));
-                                dc.DrawLine(nx, ty + 5, nx, ty + track_h_actual - 5);
+                                if (nx >= view_x) {
+                                    dc.SetPen(wxPen(wxColour(255, 100, 100)));
+                                    dc.DrawLine(nx, ty + 5, nx, ty + track_h_actual - 5);
+                                }
                             } else {
                                 // Find note length
                                 int note_len = 1;
@@ -1233,14 +1325,14 @@ void TracksView::draw(wxDC& dc) {
                                             int nw_sample = tick_to_x(sample_rows_for_display(m_engine, *sample.data));
                                             int nw = std::min(nw_limit, nw_sample);
                                             if (nw < 2) nw = 2;
+                                            if (nx + nw <= view_x) continue;  // Block entirely left of viewport
 
                                             const size_t samples_to_draw =
                                                 sample_frames_for_display_rows(m_engine, *sample.data, (double)nw / m_zoom);
 
-                                            // Detect overlaps
-                                            auto overlaps = detect_overlaps(sampler);
-                                            bool is_overlapping = (s_idx < overlaps.size()) && overlaps[s_idx].is_overlapping;
-                                            
+                                            // Use pre-computed overlaps
+                                            bool is_overlapping = (s_idx < cached_overlaps.size()) && cached_overlaps[s_idx].is_overlapping;
+
                                             // Draw sample background
                                             if (is_overlapping) {
                                                 dc.SetBrush(wxBrush(wxColour(255, 200, 0, 128)));
@@ -1250,10 +1342,10 @@ void TracksView::draw(wxDC& dc) {
                                                 dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                                             }
                                             dc.DrawRectangle(nx, ty + 5, nw, track_h_actual - 10);
-                                            
+
                                             // Draw waveform
                                             draw_waveform_helper(dc, nx, ty + 5, nw, track_h_actual - 10, *sample.data, ThemeManager::toWxColour(m_engine.m_tracker_note), samples_to_draw);
-                                            
+
                                             // Draw overlap indicator if needed
                                             if (is_overlapping) {
                                                 dc.SetPen(wxPen(wxColour(255, 100, 0), 2));
@@ -1264,11 +1356,12 @@ void TracksView::draw(wxDC& dc) {
                                 } else {
                                     int nw = tick_to_x(note_len);
                                     if (nw < 2) nw = 2;
+                                    if (nx + nw <= view_x) continue;  // Block entirely left of viewport
                                     // Just a block
                                     dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_note)));
                                     dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_note)));
                                     dc.DrawRectangle(nx, ty + 5, nw, track_h_actual - 10);
-                                    
+
                                     dc.SetTextForeground(ThemeManager::toWxColour(m_engine.m_tracker_bg));
                                     wxFont note_font(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
                                     dc.SetFont(note_font);
@@ -1281,7 +1374,6 @@ void TracksView::draw(wxDC& dc) {
                         }
                     }
                 }
-                rows_done += pat_rows;
             }
         }
 
@@ -1311,7 +1403,7 @@ void TracksView::draw(wxDC& dc) {
         wxColour sel_col = ThemeManager::toWxColour(m_engine.m_selection_color);
         dc.SetBrush(wxBrush(wxColour(sel_col.Red(), sel_col.Green(), sel_col.Blue(), 32)));
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.DrawRectangle(sx1, 0, sx2 - sx1, virtual_size.GetHeight());
+        dc.DrawRectangle(sx1, view_y, sx2 - sx1, csize.GetHeight());
 
         // Draw selection highlight on the selected track if it's a sampler
         for (int selected_track_idx : selected_tracks()) {
@@ -1336,8 +1428,8 @@ void TracksView::draw(wxDC& dc) {
         
         // Border lines across all tracks
         dc.SetPen(wxPen(wxColour(sel_col.Red(), sel_col.Green(), sel_col.Blue(), 128), 1, wxPENSTYLE_DOT));
-        dc.DrawLine(sx1, 0, sx1, virtual_size.GetHeight());
-        dc.DrawLine(sx2, 0, sx2, virtual_size.GetHeight());
+        dc.DrawLine(sx1, view_y, sx1, view_bottom);
+        dc.DrawLine(sx2, view_y, sx2, view_bottom);
     }
 }
 
