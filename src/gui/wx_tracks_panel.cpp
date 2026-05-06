@@ -850,6 +850,15 @@ void TracksPanel::update() {
         return;
     }
 
+    // Always refresh during recording to update live waveform and input VU meters
+    if (m_engine.is_recording_audio_tracks()) {
+        last_order_pos = current_pos;
+        last_row = current_row;
+        last_transport = current_transport;
+        m_tracks_view->Refresh();
+        return;
+    }
+
     if (current_pos != last_order_pos || current_row != last_row || current_transport != last_transport) {
         last_order_pos = current_pos;
         last_row = current_row;
@@ -1101,6 +1110,13 @@ void TracksView::draw(wxDC& dc) {
         }
     }
 
+    // Track recording start position
+    if (m_engine.is_recording_audio_tracks()) {
+        if (m_recording_start_tick < 0) m_recording_start_tick = play_tick;
+    } else {
+        m_recording_start_tick = -1;
+    }
+
     // Draw Tracks
     int cur_y = 30;
     double bpm = m_engine.tempo();
@@ -1192,6 +1208,31 @@ void TracksView::draw(wxDC& dc) {
             }
             dc.DrawText(fit_header_text(dc, status_line, text_max_width), kHeaderTextX, ty + 56);
 
+            // Input VU meter for armed audio tracks with an assigned input
+            if (track_has_record && m_engine.is_audio_track_armed((size_t)t)) {
+                int in_l = -1, in_r = -1;
+                track_obj.get_audio_input(in_l, in_r);
+                if (in_l >= 0 && (uint32_t)in_l < m_engine.m_num_ins) {
+                    float level = m_engine.input_level((uint32_t)in_l);
+                    const int vu_x = kHeaderTextX;
+                    const int vu_y = ty + 68;
+                    const int vu_max_w = std::max(20, text_max_width);
+                    const int vu_h = 6;
+                    // Background
+                    dc.SetBrush(wxBrush(wxColour(40, 20, 20)));
+                    dc.SetPen(*wxTRANSPARENT_PEN);
+                    dc.DrawRectangle(vu_x, vu_y, vu_max_w, vu_h);
+                    // Filled bar
+                    const int vu_w = std::min(vu_max_w, (int)(level * vu_max_w));
+                    if (vu_w > 0) {
+                        const wxColour vu_col = level > 0.8f ? wxColour(220, 40, 40) :
+                                                level > 0.5f ? wxColour(220, 180, 40) : wxColour(60, 200, 60);
+                        dc.SetBrush(wxBrush(vu_col));
+                        dc.DrawRectangle(vu_x, vu_y, vu_w, vu_h);
+                    }
+                }
+            }
+
             if (track_has_controls) {
                 const wxColour fg = ThemeManager::toWxColour(m_engine.m_fg_color);
                 const wxColour base = ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight);
@@ -1266,6 +1307,23 @@ void TracksView::draw(wxDC& dc) {
                                              *sample.data,
                                              ThemeManager::toWxColour(m_engine.m_tracker_note),
                                              samples_to_draw);
+                    }
+                }
+
+                // Live recording waveform overlay
+                if (track_obj.is_audio_capture_active() && m_recording_start_tick >= 0) {
+                    SampleData* live_sd = track_obj.capture_data();
+                    const size_t wp = track_obj.capture_write_pos();
+                    if (live_sd && wp > 0 && samples_per_row > 0.0) {
+                        const int rec_x = header_w + tick_to_x(m_recording_start_tick);
+                        const int live_w = std::max(2, (int)((double)wp / samples_per_row * m_zoom));
+                        // Red shaded background for the recording region
+                        dc.SetBrush(wxBrush(wxColour(120, 20, 20, 80)));
+                        dc.SetPen(*wxTRANSPARENT_PEN);
+                        dc.DrawRectangle(rec_x, ty + 5, live_w, track_h_actual - 10);
+                        // Live waveform in bright red
+                        draw_waveform_helper(dc, rec_x, ty + 5, live_w, track_h_actual - 10,
+                                             *live_sd, wxColour(255, 80, 80), wp);
                     }
                 }
                 continue;
@@ -1387,6 +1445,21 @@ void TracksView::draw(wxDC& dc) {
         int play_x = header_w + tick_to_x(play_tick);
         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
         dc.DrawLine(play_x, 0, play_x, virtual_size.GetHeight());
+    }
+
+    // Recording region: vertical marker at recording start + shaded region up to play cursor
+    if (m_recording_start_tick >= 0 && m_engine.is_recording_audio_tracks()) {
+        const int rec_x = header_w + tick_to_x(m_recording_start_tick);
+        const int play_x = header_w + tick_to_x(play_tick);
+        // Shaded recording region
+        if (play_x > rec_x) {
+            dc.SetBrush(wxBrush(wxColour(200, 40, 40, 40)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(rec_x, 0, play_x - rec_x, virtual_size.GetHeight());
+        }
+        // Red vertical line at recording start
+        dc.SetPen(wxPen(wxColour(220, 60, 60), 2));
+        dc.DrawLine(rec_x, 0, rec_x, virtual_size.GetHeight());
     }
 
     // Selection - highlight on selected track AND guide on all tracks

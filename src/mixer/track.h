@@ -195,6 +195,8 @@ public:
     std::shared_ptr<SampleData> finish_audio_capture();
     void capture_audio_input(const float* const* in_bufs, uint32_t num_ins, size_t frames);
     bool is_audio_capture_active() const { return m_capture_sample_ptr.load(std::memory_order_acquire) != nullptr; }
+    SampleData* capture_data() const { return m_capture_sample_ptr.load(std::memory_order_acquire); }
+    size_t capture_write_pos() const { return m_capture_write_pos.load(std::memory_order_acquire); }
 
 private:
     void cancel_pending_notes(size_t column);

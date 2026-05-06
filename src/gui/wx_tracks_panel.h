@@ -130,6 +130,7 @@ private:
     int m_selection_anchor_track = -1;
     std::set<int> m_selected_tracks;
     bool m_is_selecting = false;
+    int m_recording_start_tick = -1;
 
     wxDECLARE_EVENT_TABLE();
 };

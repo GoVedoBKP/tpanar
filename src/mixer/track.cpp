@@ -203,7 +203,7 @@ void tpanar_ns::Track::process(float* out_l,
     if (m_instrument)
         m_instrument->process(out_l, out_r, nframes);
 
-    if (m_audio_voice && m_audio_voice->active()) {
+    if (m_audio_voice && m_audio_voice->active() && !is_audio_capture_active()) {
         m_audio_voice->process(out_l, out_r, nframes);
     }
 
