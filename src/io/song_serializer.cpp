@@ -305,7 +305,6 @@ namespace tpanar_ns
                 InstrumentType type = (InstrumentType)ji["type"];
                 if (type == InstrumentType::Plugin ||
                     type == InstrumentType::Midi ||
-                    type == InstrumentType::Voice ||
                     type == InstrumentType::XRNI) {
                     type = InstrumentType::None;
                 }

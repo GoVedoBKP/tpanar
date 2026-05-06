@@ -132,18 +132,6 @@ private:
     wxSpinCtrl* m_midi_program;
     wxChoice* m_midi_input_choice;
 
-    wxPanel* m_voice_editor;
-    wxChoice* m_voice_tts_mode_ch;
-    wxChoice*   m_voice_language_ch;
-    wxChoice*   m_voice_gender_ch;
-    wxChoice*   m_voice_variant_ch;
-    wxSlider* m_voice_speed_slider;
-    wxSlider* m_voice_accent_slider;
-    wxSpinCtrl* m_voice_phrase_idx;
-    wxListBox* m_voice_phrase_list;
-    wxTextCtrl* m_voice_phrase_text;
-    wxButton* m_voice_process_btn;
-
     wxButton* m_zoom_in_btn;
     wxButton* m_zoom_out_btn;
     wxButton* m_view_all_btn;

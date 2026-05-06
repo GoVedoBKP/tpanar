@@ -49,8 +49,6 @@ tpanar_SOURCES = \
     instrument/dssi_instrument.cpp \
     instrument/lv2_instrument.cpp \
     instrument/midi_instrument.cpp \
-    instrument/voice_instrument.cpp \
-    instrument/voice_synthesis_worker.cpp \
     io/audio_file.cpp \
     io/project_archive.cpp \
     io/song_serializer.cpp \
@@ -74,7 +72,6 @@ tpanar_CXXFLAGS = \
     $(FFTW3_CFLAGS) \
     $(LIBARCHIVE_CFLAGS) \
     $(FLUIDSYNTH_CFLAGS) \
-    $(ESPEAK_NG_CFLAGS) \
     $(ALSA_CFLAGS)
 
 tpanar_LDADD = \
@@ -86,5 +83,4 @@ tpanar_LDADD = \
     $(FFTW3_LIBS) \
     $(LIBARCHIVE_LIBS) \
     $(FLUIDSYNTH_LIBS) \
-    $(ESPEAK_NG_LIBS) \
     $(ALSA_LIBS)

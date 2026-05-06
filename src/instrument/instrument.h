@@ -23,7 +23,6 @@ enum class InstrumentType {
     SFZ,
     Plugin,
     Midi,
-    Voice,
     XRNI
 };
 

@@ -89,9 +89,6 @@ esac
 # FluidSynth
 PKG_CHECK_MODULES([FLUIDSYNTH], [fluidsynth])
 
-# eSpeak NG
-PKG_CHECK_MODULES([ESPEAK_NG], [espeak-ng])
-
 # SoundTouch
 PKG_CHECK_MODULES([SNDTOUCH], [soundtouch])
 AC_DEFINE([HAVE_SNDTOUCH], [1], [Define if sndtouch is available])
