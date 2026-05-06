@@ -562,6 +562,8 @@ void SettingsPanel::on_reinit_audio(wxCommandEvent& event) {
     m_engine.reinitialize_audio(m_audio_ins->GetValue(), m_audio_outs->GetValue(), m_midi_ins->GetValue(), m_midi_outs->GetValue());
     m_engine.save_config();
     refresh_audio_status();
+    if (auto* main = dynamic_cast<WxMainWindow*>(wxGetTopLevelParent(this)))
+        main->update_all_uis();
     wxMessageBox("Audio settings updated. JACK may require reconnecting ports; OSS uses /dev/dsp playback only.", "Info", wxOK | wxICON_INFORMATION);
 }
 
