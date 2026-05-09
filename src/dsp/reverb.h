@@ -103,15 +103,24 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Small Room", "Large Hall", "Cathedral", "Dark Plate"};
+        return {"Small Room", "Large Hall", "Cathedral", "Dark Plate",
+                "Drum Booth", "Snare Plate", "Room Ambience", "Gated Verb"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
-        if (name == "Small Room") { room_size = 0.3f; damp = 0.5f; mix = 0.2f; }
-        else if (name == "Large Hall") { room_size = 0.7f; damp = 0.2f; mix = 0.4f; }
-        else if (name == "Cathedral") { room_size = 0.9f; damp = 0.1f; mix = 0.5f; }
-        else if (name == "Dark Plate") { room_size = 0.6f; damp = 0.8f; mix = 0.3f; }
+        if (name == "Small Room")       { room_size = 0.30f; damp = 0.50f; mix = 0.20f; }
+        else if (name == "Large Hall")  { room_size = 0.70f; damp = 0.20f; mix = 0.40f; }
+        else if (name == "Cathedral")   { room_size = 0.90f; damp = 0.10f; mix = 0.50f; }
+        else if (name == "Dark Plate")  { room_size = 0.60f; damp = 0.80f; mix = 0.30f; }
+        // Tight booth — close-mic character, very short tail, heavily damped
+        else if (name == "Drum Booth")  { room_size = 0.18f; damp = 0.85f; mix = 0.12f; }
+        // Classic snare plate — medium-length bright decay
+        else if (name == "Snare Plate") { room_size = 0.45f; damp = 0.25f; mix = 0.25f; }
+        // Natural room blended under the dry drum bus
+        else if (name == "Room Ambience"){ room_size = 0.38f; damp = 0.55f; mix = 0.18f; }
+        // Large bright tail for gated reverb effect (pair with a Gate after this)
+        else if (name == "Gated Verb")  { room_size = 0.80f; damp = 0.05f; mix = 0.40f; }
     }
 
 private:

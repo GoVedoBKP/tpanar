@@ -95,15 +95,26 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Gentle Master", "Punchy Drums", "Vocal Leveler", "Hard Squash"};
+        return {"Gentle Master", "Punchy Drums", "Vocal Leveler", "Hard Squash",
+                "Kick Smack", "Snare Pop", "Drum Bus", "Parallel Crush", "Overhead Glue"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
-        if (name == "Gentle Master") { threshold = 0.8f; ratio = 2.0f; attack = 0.05f; release = 0.2f; makeup = 1.1f; }
-        else if (name == "Punchy Drums") { threshold = 0.5f; ratio = 4.0f; attack = 0.01f; release = 0.1f; makeup = 1.2f; }
-        else if (name == "Vocal Leveler") { threshold = 0.6f; ratio = 3.0f; attack = 0.02f; release = 0.3f; makeup = 1.1f; }
-        else if (name == "Hard Squash") { threshold = 0.3f; ratio = 10.0f; attack = 0.005f; release = 0.05f; makeup = 1.5f; }
+        if (name == "Gentle Master")    { threshold = 0.8f;  ratio =  2.0f; attack = 0.050f; release = 0.200f; makeup = 1.10f; }
+        else if (name == "Punchy Drums"){ threshold = 0.5f;  ratio =  4.0f; attack = 0.010f; release = 0.100f; makeup = 1.20f; }
+        else if (name == "Vocal Leveler"){ threshold = 0.6f; ratio =  3.0f; attack = 0.020f; release = 0.300f; makeup = 1.10f; }
+        else if (name == "Hard Squash") { threshold = 0.3f;  ratio = 10.0f; attack = 0.005f; release = 0.050f; makeup = 1.50f; }
+        // Kick: slow enough to let transient through, fast release for each hit
+        else if (name == "Kick Smack")  { threshold = 0.45f; ratio =  6.0f; attack = 0.004f; release = 0.080f; makeup = 1.30f; }
+        // Snare: very fast to clamp body, quick release to restore crack
+        else if (name == "Snare Pop")   { threshold = 0.50f; ratio =  5.0f; attack = 0.001f; release = 0.060f; makeup = 1.25f; }
+        // Drum bus glue: preserves transients, controls dynamics gently
+        else if (name == "Drum Bus")    { threshold = 0.65f; ratio =  3.0f; attack = 0.025f; release = 0.150f; makeup = 1.15f; }
+        // Parallel crush: extreme ratio for blending underneath the dry signal
+        else if (name == "Parallel Crush"){ threshold = 0.15f; ratio = 20.0f; attack = 0.001f; release = 0.050f; makeup = 1.80f; }
+        // Overhead: gentle leveling without killing cymbal transients
+        else if (name == "Overhead Glue"){ threshold = 0.72f; ratio =  2.0f; attack = 0.035f; release = 0.250f; makeup = 1.05f; }
     }
 
 private:

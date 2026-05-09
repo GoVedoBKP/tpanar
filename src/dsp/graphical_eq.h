@@ -144,16 +144,43 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Flat", "Bass Boost", "Treble Boost", "Loudness", "Mid Scoop"};
+        return {"Flat", "Bass Boost", "Treble Boost", "Loudness", "Mid Scoop",
+                "Kick Punch", "Snare Crack", "Overhead Brightness", "Room Warmth", "Hi-Hat Air"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
         if (name == "Flat") { m_gains.fill(0.0f); }
-        else if (name == "Bass Boost") { m_gains.fill(0.0f); m_gains[0]=6; m_gains[1]=5; m_gains[2]=3; }
+        else if (name == "Bass Boost")   { m_gains.fill(0.0f); m_gains[0]=6; m_gains[1]=5; m_gains[2]=3; }
         else if (name == "Treble Boost") { m_gains.fill(0.0f); m_gains[8]=3; m_gains[9]=5; m_gains[10]=6; m_gains[11]=6; }
-        else if (name == "Loudness") { m_gains.fill(0.0f); m_gains[0]=6; m_gains[1]=4; m_gains[10]=4; m_gains[11]=6; }
-        else if (name == "Mid Scoop") { m_gains.fill(0.0f); m_gains[4]=-4; m_gains[5]=-6; m_gains[6]=-4; }
+        else if (name == "Loudness")     { m_gains.fill(0.0f); m_gains[0]=6; m_gains[1]=4; m_gains[10]=4; m_gains[11]=6; }
+        else if (name == "Mid Scoop")    { m_gains.fill(0.0f); m_gains[4]=-4; m_gains[5]=-6; m_gains[6]=-4; }
+        // Kick: weight at 64 Hz, punch at 125 Hz, mud cut 250-500 Hz, click at 4-8 kHz
+        else if (name == "Kick Punch") {
+            m_gains.fill(0.0f);
+            m_gains[1]=6; m_gains[2]=4; m_gains[3]=-3; m_gains[4]=-4; m_gains[7]=3; m_gains[8]=2;
+        }
+        // Snare: body at 250 Hz, crack at 2 kHz, snap at 8 kHz, cut mud
+        else if (name == "Snare Crack") {
+            m_gains.fill(0.0f);
+            m_gains[2]=-2; m_gains[3]=4; m_gains[4]=-2; m_gains[6]=5; m_gains[8]=3; m_gains[9]=2;
+        }
+        // Overheads: cut unnecessary lows, lift air above 12 kHz
+        else if (name == "Overhead Brightness") {
+            m_gains.fill(0.0f);
+            m_gains[0]=-6; m_gains[1]=-4; m_gains[2]=-2; m_gains[9]=3; m_gains[10]=4; m_gains[11]=3;
+        }
+        // Room mics: add warmth in low-mids, tame harsh high end
+        else if (name == "Room Warmth") {
+            m_gains.fill(0.0f);
+            m_gains[1]=2; m_gains[2]=3; m_gains[9]=-2; m_gains[10]=-4; m_gains[11]=-5;
+        }
+        // Hi-hat / cymbal: low-cut, bring out sizzle at 8-16 kHz
+        else if (name == "Hi-Hat Air") {
+            m_gains.fill(0.0f);
+            m_gains[0]=-6; m_gains[1]=-6; m_gains[2]=-4; m_gains[3]=-2;
+            m_gains[8]=3; m_gains[9]=4; m_gains[10]=3;
+        }
         update_filters();
     }
 

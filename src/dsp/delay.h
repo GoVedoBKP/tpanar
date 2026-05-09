@@ -59,15 +59,17 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Default", "Slapback", "Long Eco", "Feedback Beast"};
+        return {"Default", "Slapback", "Long Eco", "Feedback Beast", "Drum Slap"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
-        if (name == "Default") { feedback = 0.4f; mix = 0.3f; }
-        else if (name == "Slapback") { feedback = 0.1f; mix = 0.5f; m_pos = (m_pos + MAX_DELAY - 2000) % MAX_DELAY; }
-        else if (name == "Long Eco") { feedback = 0.6f; mix = 0.4f; }
-        else if (name == "Feedback Beast") { feedback = 0.95f; mix = 0.5f; }
+        if (name == "Default")            { feedback = 0.40f; mix = 0.30f; }
+        else if (name == "Slapback")      { feedback = 0.10f; mix = 0.50f; m_pos = (m_pos + MAX_DELAY - 2000) % MAX_DELAY; }
+        else if (name == "Long Eco")      { feedback = 0.60f; mix = 0.40f; }
+        else if (name == "Feedback Beast"){ feedback = 0.95f; mix = 0.50f; }
+        // Very short single repeat (≈30 ms) adds snap to drums without washing them out
+        else if (name == "Drum Slap")     { feedback = 0.05f; mix = 0.20f; m_pos = (m_pos + MAX_DELAY - 1323) % MAX_DELAY; }
     }
 
 private:

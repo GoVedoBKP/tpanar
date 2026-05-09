@@ -79,14 +79,16 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Safe Ceiling", "Hard Wall", "Soft Limiter"};
+        return {"Safe Ceiling", "Hard Wall", "Soft Limiter", "Drum Bus Limiter"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
-        if (name == "Safe Ceiling") { ceiling = 0.95f; threshold = 0.90f; release = 0.999f; }
-        else if (name == "Hard Wall") { ceiling = 1.0f; threshold = 1.0f; release = 0.99f; }
-        else if (name == "Soft Limiter") { ceiling = 0.90f; threshold = 0.70f; release = 0.9995f; }
+        if (name == "Safe Ceiling")        { ceiling = 0.95f; threshold = 0.90f; release = 0.999f; }
+        else if (name == "Hard Wall")      { ceiling = 1.00f; threshold = 1.00f; release = 0.990f; }
+        else if (name == "Soft Limiter")   { ceiling = 0.90f; threshold = 0.70f; release = 0.9995f; }
+        // Drum bus: tight ceiling to keep transients in check with fast recovery
+        else if (name == "Drum Bus Limiter"){ ceiling = 0.95f; threshold = 0.85f; release = 0.997f; }
     }
 
 private:

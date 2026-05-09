@@ -87,14 +87,20 @@ public:
     }
 
     std::vector<std::string> get_presets() override {
-        return {"Noise Floor", "Tight Drums", "Hard Cut"};
+        return {"Noise Floor", "Tight Drums", "Hard Cut", "Kick Gate", "Snare Gate", "Room Gate"};
     }
 
     void load_preset(const std::string& name) override {
         m_current_preset = name;
-        if (name == "Noise Floor") { threshold = 0.05f; range = 0.0f; attack = 0.01f; release = 0.1f; }
-        else if (name == "Tight Drums") { threshold = 0.2f; range = 0.0f; attack = 0.001f; release = 0.05f; }
-        else if (name == "Hard Cut") { threshold = 0.5f; range = 0.0f; attack = 0.001f; release = 0.01f; }
+        if (name == "Noise Floor")     { threshold = 0.05f; range = 0.0f; attack = 0.010f; release = 0.100f; }
+        else if (name == "Tight Drums"){ threshold = 0.20f; range = 0.0f; attack = 0.001f; release = 0.050f; }
+        else if (name == "Hard Cut")   { threshold = 0.50f; range = 0.0f; attack = 0.001f; release = 0.010f; }
+        // Kick: high threshold clamps bleed, fast open/close for each kick hit
+        else if (name == "Kick Gate")  { threshold = 0.30f; range = 0.0f; attack = 0.001f; release = 0.080f; }
+        // Snare: medium threshold, very quick release preserving snare tail
+        else if (name == "Snare Gate") { threshold = 0.25f; range = 0.0f; attack = 0.001f; release = 0.050f; }
+        // Room mic gate: lower threshold for subtle ambient bleed removal
+        else if (name == "Room Gate")  { threshold = 0.12f; range = 0.0f; attack = 0.005f; release = 0.200f; }
     }
 
 private:
