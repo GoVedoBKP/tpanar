@@ -104,6 +104,10 @@ public:
     void do_retrigger_stretch_whole_track();
     void do_undo();
     void do_redo();
+    // Punch-in / punch-out marker helpers.
+    void set_marker_in_at(int unscrolled_x);
+    void set_marker_out_at(int unscrolled_x);
+    void clear_punch_markers();
     int cursor_row() const { return m_sel_start_tick >= 0 ? m_sel_start_tick : 0; }
 
 private:
@@ -131,6 +135,11 @@ private:
     std::set<int> m_selected_tracks;
     bool m_is_selecting = false;
     int m_recording_start_tick = -1;
+
+    // Punch-in / punch-out markers (absolute song rows, -1 = unset).
+    int m_marker_in = -1;
+    int m_marker_out = -1;
+    int m_last_right_click_x = 0; // unscrolled X at last right-click, for "Set marker here"
 
     wxDECLARE_EVENT_TABLE();
 };

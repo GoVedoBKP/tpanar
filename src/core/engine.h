@@ -294,6 +294,17 @@ public:
     void toggle_play();
     void set_loop(bool enable);
     void set_play_position(size_t pattern, size_t row);
+
+    // Punch-in / punch-out markers (absolute song rows, -1 = disabled).
+    // When both are set and audio record is enabled, start() / play() will
+    // automatically do a punch-in recording between the two row positions.
+    void set_punch_in_row(int row) { m_punch_in_row.store(row, std::memory_order_relaxed); }
+    void set_punch_out_row(int row) { m_punch_out_row.store(row, std::memory_order_relaxed); }
+    void clear_punch_markers() { m_punch_in_row.store(-1, std::memory_order_relaxed); m_punch_out_row.store(-1, std::memory_order_relaxed); }
+    int punch_in_row() const { return m_punch_in_row.load(std::memory_order_relaxed); }
+    int punch_out_row() const { return m_punch_out_row.load(std::memory_order_relaxed); }
+    // Play with punch-in: starts playback from punch_in - preroll, enables capture only at punch_in_row.
+    void play_punch_in();
     tpanar_ns::Track& track(size_t index);
     const tpanar_ns::Track& track(size_t index) const;
     size_t track_count() const;
@@ -403,6 +414,12 @@ private:
     ::std::atomic<bool> m_audio_record_capture_enabled{false};
     ::std::atomic<bool> m_record_preroll_active{false};
     ::std::atomic<size_t> m_record_preroll_remaining_samples{0};
+
+    // Punch-in/out: absolute song rows (-1 = disabled). Written by GUI thread, read by RT thread.
+    ::std::atomic<int> m_punch_in_row{-1};
+    ::std::atomic<int> m_punch_out_row{-1};
+    // Set by start_armed_audio_recording when punch-in is active; consumed by stop_armed_audio_recording.
+    ::std::atomic<int> m_punch_captured_start_row{-1};
 
     tpanar_ns::Timing m_timing;
 

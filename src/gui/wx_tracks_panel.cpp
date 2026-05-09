@@ -759,7 +759,11 @@ enum {
     ID_MENU_RETRIGGER_SELECTION,
     ID_MENU_RETRIGGER_WHOLE,
     ID_MENU_UNDO,
-    ID_MENU_REDO
+    ID_MENU_REDO,
+    ID_MENU_SET_MARKER_IN,
+    ID_MENU_SET_MARKER_OUT,
+    ID_MENU_CLEAR_MARKERS,
+    ID_MENU_PUNCH_RECORD
 };
 
 wxBEGIN_EVENT_TABLE(TracksPanel, wxPanel)
@@ -1524,6 +1528,45 @@ void TracksView::draw(wxDC& dc) {
         dc.DrawLine(sx1, view_y, sx1, view_bottom);
         dc.DrawLine(sx2, view_y, sx2, view_bottom);
     }
+
+    // Draw punch-in / punch-out markers.
+    if (m_marker_in >= 0 || m_marker_out >= 0) {
+        const int in_x  = (m_marker_in  >= 0) ? (header_w + tick_to_x(m_marker_in))  : -1;
+        const int out_x = (m_marker_out >= 0) ? (header_w + tick_to_x(m_marker_out)) : -1;
+
+        // Shaded punch region between markers.
+        if (m_marker_in >= 0 && m_marker_out >= 0 && out_x > in_x) {
+            dc.SetBrush(wxBrush(wxColour(255, 180, 0, 28)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(in_x, view_y, out_x - in_x, csize.GetHeight());
+        }
+
+        // IN marker: green vertical line + small flag.
+        if (in_x >= 0) {
+            dc.SetPen(wxPen(wxColour(0, 220, 80), 2));
+            dc.DrawLine(in_x, view_y, in_x, view_bottom);
+            dc.SetBrush(wxBrush(wxColour(0, 220, 80)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            wxPoint tri_in[] = { wxPoint(in_x, view_y), wxPoint(in_x + 14, view_y), wxPoint(in_x, view_y + 12) };
+            dc.DrawPolygon(3, tri_in);
+            dc.SetTextForeground(wxColour(0, 0, 0));
+            dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            dc.DrawText("IN", in_x + 1, view_y);
+        }
+
+        // OUT marker: red vertical line + small flag.
+        if (out_x >= 0) {
+            dc.SetPen(wxPen(wxColour(220, 40, 40), 2));
+            dc.DrawLine(out_x, view_y, out_x, view_bottom);
+            dc.SetBrush(wxBrush(wxColour(220, 40, 40)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            wxPoint tri_out[] = { wxPoint(out_x - 14, view_y), wxPoint(out_x, view_y), wxPoint(out_x, view_y + 12) };
+            dc.DrawPolygon(3, tri_out);
+            dc.SetTextForeground(wxColour(255, 255, 255));
+            dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            dc.DrawText("OUT", out_x - 13, view_y);
+        }
+    }
 }
 
 void TracksView::OnMouseDown(wxMouseEvent& event) {
@@ -1683,8 +1726,10 @@ void TracksView::update_view() {
 }
 
 void TracksView::OnMouseRightClick(wxMouseEvent& event) {
-    // Store position for potential operations
-    // The actual context menu is shown via wxContextMenuEvent
+    // Capture unscrolled X for "set marker here" operations.
+    int ux = 0, uy = 0;
+    CalcUnscrolledPosition(event.GetX(), event.GetY(), &ux, &uy);
+    m_last_right_click_x = ux;
     event.Skip();
 }
 
@@ -1716,6 +1761,16 @@ void TracksView::OnContextMenu(wxContextMenuEvent& event) {
     menu.AppendSeparator();
     menu.Append(ID_MENU_UNDO, "Undo\tCtrl+Z", "Undo last operation");
     menu.Append(ID_MENU_REDO, "Redo\tCtrl+Y", "Redo last operation");
+
+    // Punch-in/out markers
+    menu.AppendSeparator();
+    menu.Append(ID_MENU_SET_MARKER_IN,  "Set IN marker here\t[",  "Set punch-in marker at this position");
+    menu.Append(ID_MENU_SET_MARKER_OUT, "Set OUT marker here\t]", "Set punch-out marker at this position");
+    if (m_marker_in >= 0 || m_marker_out >= 0) {
+        menu.Append(ID_MENU_CLEAR_MARKERS, "Clear markers", "Remove punch-in and punch-out markers");
+        if (m_marker_in >= 0 && m_marker_out > m_marker_in && m_engine.has_armed_audio_tracks())
+            menu.Append(ID_MENU_PUNCH_RECORD, "Punch record", "Record between IN and OUT markers");
+    }
     
     // Bind menu events to operation handlers
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_cut(); }, ID_MENU_CUT);
@@ -1727,6 +1782,10 @@ void TracksView::OnContextMenu(wxContextMenuEvent& event) {
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_retrigger_stretch_whole_track(); }, ID_MENU_RETRIGGER_WHOLE);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_undo(); }, ID_MENU_UNDO);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_redo(); }, ID_MENU_REDO);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { set_marker_in_at(m_last_right_click_x); }, ID_MENU_SET_MARKER_IN);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { set_marker_out_at(m_last_right_click_x); }, ID_MENU_SET_MARKER_OUT);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { clear_punch_markers(); }, ID_MENU_CLEAR_MARKERS);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_engine.play_punch_in(); }, ID_MENU_PUNCH_RECORD);
     
     PopupMenu(&menu, event.GetPosition());
 }
@@ -1765,10 +1824,49 @@ void TracksView::OnKeyDown(wxKeyEvent& event) {
         case 'i':
             do_insert_silence();
             break;
+        case '[': {
+            // Set IN marker at current selection start (or selection cursor).
+            int row = (m_sel_start_tick >= 0) ? m_sel_start_tick : 0;
+            set_marker_in_at(tick_to_x(row) + kTrackHeaderWidth);
+            break;
+        }
+        case ']': {
+            // Set OUT marker at selection end (or after selection start).
+            int row = (m_sel_end_tick >= 0) ? std::max(m_sel_start_tick, m_sel_end_tick)
+                                             : (m_sel_start_tick >= 0 ? m_sel_start_tick + 1 : 1);
+            set_marker_out_at(tick_to_x(row) + kTrackHeaderWidth);
+            break;
+        }
         default:
             event.Skip();
             return;
     }
+}
+
+void TracksView::set_marker_in_at(int unscrolled_x)
+{
+    const int header_w = kTrackHeaderWidth;
+    const int row = x_to_tick(unscrolled_x - header_w);
+    m_marker_in = std::max(0, row);
+    m_engine.set_punch_in_row(m_marker_in);
+    Refresh();
+}
+
+void TracksView::set_marker_out_at(int unscrolled_x)
+{
+    const int header_w = kTrackHeaderWidth;
+    const int row = x_to_tick(unscrolled_x - header_w);
+    m_marker_out = std::max(0, row);
+    m_engine.set_punch_out_row(m_marker_out);
+    Refresh();
+}
+
+void TracksView::clear_punch_markers()
+{
+    m_marker_in = -1;
+    m_marker_out = -1;
+    m_engine.clear_punch_markers();
+    Refresh();
 }
 
 void TracksView::do_cut() {

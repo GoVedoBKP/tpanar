@@ -970,6 +970,50 @@ void Engine::play_from_absolute_row(size_t absolute_row) {
     start();
 }
 
+void Engine::play_punch_in()
+{
+    const int punch_in  = m_punch_in_row.load(std::memory_order_relaxed);
+    const int punch_out = m_punch_out_row.load(std::memory_order_relaxed);
+    if (punch_in < 0 || punch_out <= punch_in) return;
+
+    // Use a 2-bar preroll before the punch-in point.
+    const int preroll_rows = (int)m_timing.lpb() * 4 * 2;
+    const int start_row = std::max(0, punch_in - preroll_rows);
+
+    stop();
+    if (m_order.empty()) return;
+
+    // Position transport at start_row (absolute).
+    size_t target_order = 0;
+    size_t remaining_rows = (size_t)start_row;
+    for (; target_order < m_order.size(); ++target_order) {
+        const size_t pat_idx = m_order[target_order];
+        if (pat_idx >= m_patterns.size()) continue;
+        const size_t pat_rows = m_patterns[pat_idx]->row_count();
+        if (remaining_rows < pat_rows) break;
+        remaining_rows -= pat_rows;
+    }
+    if (target_order >= m_order.size()) {
+        target_order = m_order.size() - 1;
+        remaining_rows = 0;
+    }
+
+    m_order_pos.store(target_order);
+    set_active_pattern(m_order[target_order]);
+    m_current_row = remaining_rows;
+    m_current_tick = 0;
+    auto_seek();
+
+    // Arm recording — capture will start only when process_tick() hits punch_in_row.
+    start_armed_audio_recording();
+    // Bypass preroll — we handle timing ourselves via punch markers.
+    m_audio_record_capture_enabled.store(false, std::memory_order_release);
+    transport().play();
+    EngineCommand cmd;
+    cmd.type = EngineCommandType::Play;
+    m_cmd_queue.push(cmd);
+}
+
 void Engine::set_play_position(size_t order_pos, size_t row) {
     bool was_playing = is_playing();
     bool was_looping = transport().m_loop_pattern.load();
@@ -1092,6 +1136,34 @@ void Engine::process_tick()
     Pattern& pat = *m_patterns[pat_idx];
 
     if (m_current_tick == 0) {
+        // Compute absolute song row (inline to avoid order_list() copy allocation in RT thread).
+        const int punch_in  = m_punch_in_row.load(std::memory_order_relaxed);
+        const int punch_out = m_punch_out_row.load(std::memory_order_relaxed);
+        if ((punch_in >= 0 || punch_out >= 0) && m_is_recording_audio_tracks.load(std::memory_order_relaxed)) {
+            size_t abs_row = m_current_row;
+            const size_t order_pos = m_order_pos.load(std::memory_order_relaxed);
+            for (size_t oi = 0; oi < order_pos && oi < m_order.size(); ++oi) {
+                size_t pi = m_order[oi];
+                if (pi < m_patterns.size())
+                    abs_row += m_patterns[pi]->row_count();
+            }
+
+            if (punch_in >= 0 && (int)abs_row == punch_in &&
+                m_punch_captured_start_row.load(std::memory_order_relaxed) == -2) {
+                // Punch-in point reached: start capturing.
+                m_punch_captured_start_row.store(punch_in, std::memory_order_release);
+                m_audio_record_capture_enabled.store(true, std::memory_order_release);
+            }
+            if (punch_out >= 0 && (int)abs_row >= punch_out &&
+                m_audio_record_capture_enabled.load(std::memory_order_relaxed)) {
+                // Punch-out point reached: stop capture and schedule Stop command.
+                m_audio_record_capture_enabled.store(false, std::memory_order_release);
+                EngineCommand cmd;
+                cmd.type = EngineCommandType::Stop;
+                m_cmd_queue.push(cmd);
+            }
+        }
+
         size_t row = m_current_row;
         for (size_t t = 0; t < m_tracks.size() && t < pat.track_count(); ++t) {
             size_t num_cols = pat.column_count(t);
@@ -2243,12 +2315,23 @@ void Engine::start_armed_audio_recording()
 
     m_is_recording_audio_tracks.store(started_any, std::memory_order_release);
     m_audio_record_capture_enabled.store(false, std::memory_order_release);
+
+    // If punch-in markers are set, record where capture should begin; will be
+    // enabled by process_tick() when the punch-in row is reached.
+    // Otherwise clear so stop_armed_audio_recording knows it's not a punch session.
+    if (m_punch_in_row.load(std::memory_order_relaxed) >= 0)
+        m_punch_captured_start_row.store(-2, std::memory_order_relaxed); // -2 = punch pending
+    else
+        m_punch_captured_start_row.store(-1, std::memory_order_relaxed);
 }
 
 void Engine::stop_armed_audio_recording(bool commit)
 {
     m_audio_record_capture_enabled.store(false, std::memory_order_release);
     if (!m_is_recording_audio_tracks.exchange(false, std::memory_order_acq_rel)) return;
+
+    const int punch_start_row = m_punch_captured_start_row.exchange(-1, std::memory_order_acq_rel);
+    const bool is_punch = (punch_start_row >= 0);
 
     bool changed = false;
     for (size_t i = 0; i < m_tracks.size(); ++i) {
@@ -2263,7 +2346,43 @@ void Engine::stop_armed_audio_recording(bool commit)
         size_t sample_index = track.audio_sample_index();
         if (sample_index == 0) sample_index = 1;
 
-        if (sample_index > 0 && sample_index <= sampler->sample_count()) {
+        if (is_punch && sample_index > 0 && sample_index <= sampler->sample_count()) {
+            // Splice recorded audio into the existing take at the punch-in position.
+            const auto& existing_entry = sampler->get_sample(sample_index - 1);
+            const auto& existing = existing_entry.data;
+            sampler->push_undo(sample_index - 1);
+
+            const size_t spr = m_timing.samples_per_row();
+            const size_t splice_start = (size_t)punch_start_row * spr;
+            auto spliced = std::make_shared<SampleData>();
+            spliced->sample_rate = captured->sample_rate;
+
+            auto splice_channel = [&](std::vector<float>& out,
+                                      const std::vector<float>& orig,
+                                      const std::vector<float>& cap) {
+                // pre-punch region
+                const size_t pre_end = std::min(splice_start, orig.size());
+                out.insert(out.end(), orig.begin(), orig.begin() + pre_end);
+                // pad if existing was shorter than punch start
+                if (pre_end < splice_start)
+                    out.resize(splice_start, 0.0f);
+                // captured region
+                out.insert(out.end(), cap.begin(), cap.end());
+                // post-punch tail
+                const size_t tail_start = std::min(splice_start + cap.size(), orig.size());
+                if (tail_start < orig.size())
+                    out.insert(out.end(), orig.begin() + tail_start, orig.end());
+            };
+
+            splice_channel(spliced->left,
+                           existing ? existing->left  : std::vector<float>{},
+                           captured->left);
+            splice_channel(spliced->right,
+                           existing ? existing->right : std::vector<float>{},
+                           captured->right);
+
+            sampler->update_sample_data(sample_index - 1, spliced);
+        } else if (sample_index > 0 && sample_index <= sampler->sample_count()) {
             sampler->push_undo(sample_index - 1);
             sampler->update_sample_data(sample_index - 1, captured);
         } else {
