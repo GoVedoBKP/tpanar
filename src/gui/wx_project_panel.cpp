@@ -2,6 +2,7 @@
 #include "wx_main_window.h"
 #include "../core/engine.h"
 #include "../instrument/sample_instrument.h"
+#include "../io/midi_export.h"
 
 #include <wx/sizer.h>
 #include <wx/msgdlg.h>
@@ -58,6 +59,7 @@ wxBEGIN_EVENT_TABLE(ProjectPanel, wxPanel)
     EVT_BUTTON(wxID_FILE1, ProjectPanel::on_import)
     EVT_BUTTON(wxID_SAVE, ProjectPanel::on_save)
     EVT_BUTTON(wxID_FILE2, ProjectPanel::on_export)
+    EVT_BUTTON(wxID_FILE3, ProjectPanel::on_export_midi)
 wxEND_EVENT_TABLE()
 
 ProjectPanel::ProjectPanel(wxWindow* parent, WxMainWindow* main_window, Engine& engine)
@@ -83,13 +85,15 @@ ProjectPanel::ProjectPanel(wxWindow* parent, WxMainWindow* main_window, Engine& 
     m_load_btn = create_btn(wxID_OPEN, "Load");
     m_import_btn = create_btn(wxID_FILE1, "Import");
     m_save_btn = create_btn(wxID_SAVE, "Save");
-    m_export_btn = create_btn(wxID_FILE2, "Export");
+    m_export_btn = create_btn(wxID_FILE2, "Export WAV");
+    m_export_midi_btn = create_btn(wxID_FILE3, "Export MIDI");
 
     file_btn_grid->Add(m_new_btn, 1, wxEXPAND);
     file_btn_grid->Add(m_load_btn, 1, wxEXPAND);
     file_btn_grid->Add(m_import_btn, 1, wxEXPAND);
     file_btn_grid->Add(m_save_btn, 1, wxEXPAND);
     file_btn_grid->Add(m_export_btn, 1, wxEXPAND);
+    file_btn_grid->Add(m_export_midi_btn, 1, wxEXPAND);
     
     file_group->Add(file_btn_grid, 0, wxEXPAND | wxALL, 5);
     left_sizer->Add(file_group, 0, wxEXPAND | wxALL, 5);
@@ -781,6 +785,21 @@ void ProjectPanel::on_export_timer(wxTimerEvent& /*event*/) {
 }
 
 void ProjectPanel::on_file_select(wxCommandEvent& event) {}
+
+void ProjectPanel::on_export_midi(wxCommandEvent& /*event*/)
+{
+    wxFileDialog dlg(this, "Export MIDI", "", "",
+                     "MIDI Files (*.mid)|*.mid", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) return;
+
+    std::string path = ensure_extension(dlg.GetPath(), "mid").ToStdString();
+    if (export_midi(m_engine, path)) {
+        wxMessageBox("MIDI export completed successfully.", "Success", wxOK | wxICON_INFORMATION);
+    } else {
+        wxMessageBox("MIDI export failed. Check that the path is writable and the project has notation tracks.",
+                     "Error", wxOK | wxICON_ERROR);
+    }
+}
 
 void ProjectPanel::on_dir_changed(wxFileDirPickerEvent& event) {
     update_file_list(event.GetPath());

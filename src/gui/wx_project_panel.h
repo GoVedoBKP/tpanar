@@ -37,6 +37,7 @@ private:
     wxButton* m_import_btn;
     wxButton* m_save_btn;
     wxButton* m_export_btn;
+    wxButton* m_export_midi_btn;
     wxDirPickerCtrl* m_dir_picker;
     wxListBox* m_file_list;
 
@@ -63,6 +64,7 @@ private:
     void on_import(wxCommandEvent& event);
     void on_save(wxCommandEvent& event);
     void on_export(wxCommandEvent& event);
+    void on_export_midi(wxCommandEvent& event);
     void on_export_timer(wxTimerEvent& event);
     void on_file_select(wxCommandEvent& event);
     void on_dir_changed(wxFileDirPickerEvent& event);

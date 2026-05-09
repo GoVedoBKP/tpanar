@@ -50,6 +50,7 @@ tpanar_SOURCES = \
     instrument/lv2_instrument.cpp \
     instrument/midi_instrument.cpp \
     io/audio_file.cpp \
+    io/midi_export.cpp \
     io/project_archive.cpp \
     io/song_serializer.cpp \
     midi/midi_input.cpp \
