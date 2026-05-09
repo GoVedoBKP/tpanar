@@ -60,9 +60,11 @@ private:
     wxScrolledWindow* m_track_group;
     wxPanel* m_master_group;
     wxSlider* m_master_gain;
-    wxCheckBox* m_master_mute;
-    wxButton* m_master_sel_btn;
-    wxButton* m_detach_btn;
+    wxCheckBox* m_master_mute = nullptr;
+    wxButton* m_master_sel_btn = nullptr;
+    wxButton* m_detach_btn = nullptr;
+    wxButton* m_mute_audio_btn = nullptr;
+    wxButton* m_mute_notes_btn = nullptr;
     class VUMeter* m_master_meter_l;
     class VUMeter* m_master_meter_r;
     class AnalogVUMeter* m_master_analog_l;
@@ -89,6 +91,12 @@ private:
     void on_track_mute(wxCommandEvent& event);
     void on_track_solo(wxCommandEvent& event);
     void on_track_select(wxCommandEvent& event);
+
+    void mute_all_audio_tracks(bool mute);
+    void mute_all_note_tracks(bool mute);
+    bool all_audio_tracks_muted() const;
+    bool all_note_tracks_muted() const;
+    void update_mute_group_buttons();
     
     void on_bus_volume(wxCommandEvent& event);
     void on_bus_pan(wxCommandEvent& event);

@@ -208,6 +208,29 @@ MixerPanel::MixerPanel(wxWindow* parent, Engine& engine)
     master_strip->SetSizer(master_strip_sizer);
     master_top_row->Add(master_strip, 0, wxEXPAND | wxALL, 2);
 
+    // Group mute buttons (below the master strip, spanning mute-all for audio/notes).
+    wxBoxSizer* group_mute_sizer = new wxBoxSizer(wxVERTICAL);
+    group_mute_sizer->Add(new wxStaticText(master_strip, wxID_ANY, ""), 0, wxALL, 4); // spacer label
+    m_mute_audio_btn = new wxButton(master_strip, wxID_ANY, "Mute Audio", wxDefaultPosition, wxSize(90, 26));
+    m_mute_audio_btn->SetToolTip("Mute / unmute all audio tracks");
+    m_mute_audio_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        bool new_state = !all_audio_tracks_muted();
+        mute_all_audio_tracks(new_state);
+        update_mute_group_buttons();
+        update_mixer_ui();
+    });
+    master_strip_sizer->Add(m_mute_audio_btn, 0, wxALIGN_CENTER | wxALL, 2);
+
+    m_mute_notes_btn = new wxButton(master_strip, wxID_ANY, "Mute Notes", wxDefaultPosition, wxSize(90, 26));
+    m_mute_notes_btn->SetToolTip("Mute / unmute all notation tracks");
+    m_mute_notes_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        bool new_state = !all_note_tracks_muted();
+        mute_all_note_tracks(new_state);
+        update_mute_group_buttons();
+        update_mixer_ui();
+    });
+    master_strip_sizer->Add(m_mute_notes_btn, 0, wxALIGN_CENTER | wxALL, 2);
+
     // 2. Visual Meters (Taking remaining space)
     wxPanel* master_visuals = new wxPanel(m_master_group, wxID_ANY);
     wxBoxSizer* master_visuals_sizer = new wxBoxSizer(wxVERTICAL);
@@ -494,6 +517,7 @@ void MixerPanel::update_mixer_ui() {
 
     m_track_group->SetSizer(tracks_sizer);
     m_track_group->FitInside(); // Update scrollbars
+    update_mute_group_buttons();
 }
 
 void MixerPanel::update_meters() {
@@ -908,6 +932,49 @@ void MixerPanel::on_bus_volume(wxCommandEvent& event) {}
 void MixerPanel::on_bus_pan(wxCommandEvent& event) {}
 void MixerPanel::on_bus_mute(wxCommandEvent& event) {}
 void MixerPanel::on_bus_select(wxCommandEvent& event) {}
+
+bool MixerPanel::all_audio_tracks_muted() const
+{
+    for (size_t i = 0; i < m_engine.track_count(); ++i) {
+        if (m_engine.track(i).kind() == TrackKind::Audio && !m_engine.track(i).muted())
+            return false;
+    }
+    return m_engine.track_count() > 0;
+}
+
+bool MixerPanel::all_note_tracks_muted() const
+{
+    for (size_t i = 0; i < m_engine.track_count(); ++i) {
+        if (m_engine.track(i).kind() == TrackKind::Note && !m_engine.track(i).muted())
+            return false;
+    }
+    return m_engine.track_count() > 0;
+}
+
+void MixerPanel::mute_all_audio_tracks(bool mute)
+{
+    for (size_t i = 0; i < m_engine.track_count(); ++i) {
+        if (m_engine.track(i).kind() == TrackKind::Audio)
+            m_engine.track(i).set_mute(mute);
+    }
+}
+
+void MixerPanel::mute_all_note_tracks(bool mute)
+{
+    for (size_t i = 0; i < m_engine.track_count(); ++i) {
+        if (m_engine.track(i).kind() == TrackKind::Note)
+            m_engine.track(i).set_mute(mute);
+    }
+}
+
+void MixerPanel::update_mute_group_buttons()
+{
+    if (!m_mute_audio_btn || !m_mute_notes_btn) return;
+    bool audio_muted = all_audio_tracks_muted();
+    bool notes_muted = all_note_tracks_muted();
+    m_mute_audio_btn->SetLabel(audio_muted ? "Unmute Audio" : "Mute Audio");
+    m_mute_notes_btn->SetLabel(notes_muted ? "Unmute Notes" : "Mute Notes");
+}
 
 void MixerPanel::on_add_fx(wxCommandEvent& event) {
     bool is_master = (m_selected_track == kSelectedMaster);
