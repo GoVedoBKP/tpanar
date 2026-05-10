@@ -230,6 +230,8 @@ public:
     void set_record_preroll_bars(int bars) { m_record_preroll_bars = std::max(0, std::min(2, bars)); mark_dirty(); }
     int export_lead_in_bars() const { return m_export_lead_in_bars; }
     void set_export_lead_in_bars(int bars) { m_export_lead_in_bars = std::max(0, std::min(2, bars)); mark_dirty(); }
+    int record_latency_samples() const { return m_record_latency_samples; }
+    void set_record_latency_samples(int s) { m_record_latency_samples = std::max(0, std::min(8192, s)); }
     void ensure_tempo_track();
     void ensure_pilot_track();
     bool analyze_audio_track(size_t audio_track_index);
@@ -463,6 +465,7 @@ private:
     uint32_t m_step_size = 1;
     int m_record_preroll_bars = 1;
     int m_export_lead_in_bars = 0;
+    int m_record_latency_samples = 0;
 
     std::string m_project_title = "Untitled Project";
     std::string m_project_artist = "Unknown Artist";

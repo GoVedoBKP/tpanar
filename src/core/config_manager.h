@@ -68,6 +68,7 @@ struct Config {
     // Workflow defaults
     int record_preroll_bars = 1;
     int export_lead_in_bars = 0;
+    int record_latency_samples = 0; // input latency compensation trimmed from each recording
 };
 
 class ConfigManager {

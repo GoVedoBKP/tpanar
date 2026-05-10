@@ -702,6 +702,7 @@ void Engine::load_config() {
     m_tracker_effect = conf.tracker_effect;
     m_record_preroll_bars = std::max(0, std::min(2, conf.record_preroll_bars));
     m_export_lead_in_bars = std::max(0, std::min(2, conf.export_lead_in_bars));
+    m_record_latency_samples = std::max(0, std::min(8192, conf.record_latency_samples));
 
     m_key_bindings.set_layout((KeyboardLayout)conf.keyboard_layout);
 
@@ -738,6 +739,7 @@ void Engine::save_config() {
     conf.tracker_effect = m_tracker_effect;
     conf.record_preroll_bars = m_record_preroll_bars;
     conf.export_lead_in_bars = m_export_lead_in_bars;
+    conf.record_latency_samples = m_record_latency_samples;
 
     conf.keyboard_layout = (int)m_key_bindings.get_layout();
     ConfigManager::instance().save();
@@ -807,6 +809,7 @@ void Engine::new_project() {
     m_project_year = "";
     m_record_preroll_bars = std::max(0, std::min(2, ConfigManager::instance().config().record_preroll_bars));
     m_export_lead_in_bars = std::max(0, std::min(2, ConfigManager::instance().config().export_lead_in_bars));
+    m_record_latency_samples = std::max(0, std::min(8192, ConfigManager::instance().config().record_latency_samples));
 }
 
 void Engine::reinitialize_audio(uint32_t num_ins, uint32_t num_outs, uint32_t num_midi_ins, uint32_t num_midi_outs) {
@@ -2359,6 +2362,16 @@ void Engine::stop_armed_audio_recording(bool commit)
         auto captured = track.finish_audio_capture();
         if (!commit || !captured || captured->left.empty()) continue;
         if (!track.instrument() || track.instrument()->type() != InstrumentType::Sampler) continue;
+
+        // Latency compensation: trim the front of the captured audio by the configured
+        // input-latency offset.  This corrects the systematic delay caused by the audio
+        // hardware input buffer (typically one JACK period) that shifts recorded audio late.
+        if (m_record_latency_samples > 0) {
+            const size_t trim = std::min((size_t)m_record_latency_samples, captured->left.size());
+            captured->left.erase(captured->left.begin(), captured->left.begin() + (std::ptrdiff_t)trim);
+            if (!captured->right.empty())
+                captured->right.erase(captured->right.begin(), captured->right.begin() + (std::ptrdiff_t)trim);
+        }
 
         auto* sampler = static_cast<SampleInstrument*>(track.instrument());
         size_t sample_index = track.audio_sample_index();

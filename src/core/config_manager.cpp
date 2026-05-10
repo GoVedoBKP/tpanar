@@ -127,6 +127,7 @@ void ConfigManager::read_from(const std::string& path) {
             auto& jw = j["workflow"];
             m_config.record_preroll_bars = std::max(0, std::min(2, jw.value("record_preroll_bars", 1)));
             m_config.export_lead_in_bars = std::max(0, std::min(2, jw.value("export_lead_in_bars", 0)));
+            m_config.record_latency_samples = std::max(0, std::min(8192, jw.value("record_latency_samples", 0)));
         }
     } catch (const std::exception& e) {
         std::cerr << "Error loading config from " << path << ": " << e.what() << std::endl;
@@ -170,6 +171,7 @@ void ConfigManager::write_to(const std::string& path) {
         j["threading"]["worker_threads"] = m_config.num_worker_threads;
         j["workflow"]["record_preroll_bars"] = m_config.record_preroll_bars;
         j["workflow"]["export_lead_in_bars"] = m_config.export_lead_in_bars;
+        j["workflow"]["record_latency_samples"] = m_config.record_latency_samples;
 
         std::ofstream f(path);
         f << j.dump(4);

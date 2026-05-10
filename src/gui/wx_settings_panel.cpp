@@ -209,6 +209,23 @@ void SettingsPanel::init_audio_grp(int x, int y, int w, int h) {
     sizer->Add(row, 0, wxALL, 2);
 
     row = new wxBoxSizer(wxHORIZONTAL);
+    row->Add(new wxStaticText(m_audio_grp, wxID_ANY, "Input Latency (samples):"), 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
+    m_record_latency = new wxSpinCtrl(m_audio_grp, wxID_ANY, wxEmptyString,
+                                      wxDefaultPosition, wxSize(80, -1),
+                                      wxSP_ARROW_KEYS, 0, 8192,
+                                      m_engine.record_latency_samples());
+    m_record_latency->SetToolTip(
+        "Trim this many samples from the start of each recording to compensate for\n"
+        "input hardware latency.  Typical value = JACK buffer size (one period).\n"
+        "Increase if recorded audio appears early; decrease if it appears late.");
+    m_record_latency->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent&) {
+        m_engine.set_record_latency_samples(m_record_latency->GetValue());
+        m_engine.save_config();
+    });
+    row->Add(m_record_latency, 0, wxALL, 2);
+    sizer->Add(row, 0, wxALL, 2);
+
+    row = new wxBoxSizer(wxHORIZONTAL);
     row->Add(new wxStaticText(m_audio_grp, wxID_ANY, "Export Lead-in:"), 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
     m_export_lead_in = new wxChoice(m_audio_grp, wxID_ANY);
     m_export_lead_in->Append("Off");
@@ -284,6 +301,7 @@ void SettingsPanel::sync_audio_controls()
     m_midi_outs->SetValue(static_cast<int>(m_engine.m_num_midi_outs));
     m_record_preroll->SetSelection(bars_choice_index(m_engine.record_preroll_bars()));
     m_export_lead_in->SetSelection(bars_choice_index(m_engine.export_lead_in_bars()));
+    m_record_latency->SetValue(m_engine.record_latency_samples());
     refresh_audio_status();
 }
 

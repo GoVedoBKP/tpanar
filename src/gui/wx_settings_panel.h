@@ -34,6 +34,7 @@ private:
     wxChoice*   m_worker_threads;
     wxChoice*   m_record_preroll;
     wxChoice*   m_export_lead_in;
+    wxSpinCtrl* m_record_latency{nullptr};
     wxButton* m_reinit_audio_btn;
     wxStaticText* m_audio_status;
 
