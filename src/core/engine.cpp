@@ -247,7 +247,25 @@ bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std
         if (local < energies[i - 1] || local < energies[i + 1]) continue;
         if (have_last_hit && i - last_hit_frame < cooldown_frames) continue;
 
-        const double time_seconds = (double)centers[i] / sample_rate;
+        // The energy peak lags behind the physical transient onset.
+        // Walk back from the peak to find where the attack first crossed
+        // 30% of the way from baseline to peak — that is the true onset.
+        size_t onset_frame = i;
+        {
+            const float onset_level = baseline + (local - baseline) * 0.30f;
+            const size_t max_look = std::min(i, (size_t)8);
+            bool found = false;
+            for (size_t k = 1; k <= max_look; ++k) {
+                if (energies[i - k] < onset_level) {
+                    onset_frame = i - (k - 1);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) onset_frame = i - max_look;
+        }
+
+        const double time_seconds = (double)centers[onset_frame] / (double)sample_rate;
         const size_t absolute_row = (size_t)std::llround(time_seconds * engine_rows_per_second);
         if (absolute_row >= song_rows) continue;
 
