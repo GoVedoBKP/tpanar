@@ -52,6 +52,9 @@ constexpr int kControlButtonGapY = 4;
 constexpr int kControlRightMargin = 10;
 constexpr int kHeaderTextX = 30;
 constexpr int kHeaderTextRightPadding = 10;
+constexpr int kTimelineHeaderHeight = 20;
+constexpr int kPositionRulerHeight = 18;
+constexpr int kTracksContentTop = kTimelineHeaderHeight + kPositionRulerHeight;
 
 enum class HeaderControl {
     Minimize,
@@ -863,7 +866,7 @@ void TracksPanel::update() {
         last_order_pos = current_pos;
         last_row = current_row;
         last_transport = current_transport;
-        m_tracks_view->Refresh();
+        m_tracks_view->Refresh(false);
         return;
     }
 
@@ -871,7 +874,7 @@ void TracksPanel::update() {
         last_order_pos = current_pos;
         last_row = current_row;
         last_transport = current_transport;
-        m_tracks_view->Refresh();
+        m_tracks_view->Refresh(false);
     }
 }
 
@@ -909,8 +912,9 @@ TracksView::TracksView(wxWindow* parent, wxWindowID id, Engine& engine)
     : wxScrolledWindow(parent, id), m_engine(engine)
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
+    SetDoubleBuffered(true);
     m_zoom = 10.0;
-    SetScrollRate(1, 1);
+    SetScrollRate(8, 12);
     m_needs_initial_view_all = true;
 }
 
@@ -965,7 +969,7 @@ void TracksView::toggle_track_minimize(int track_idx) {
     auto& track = m_engine.track(track_idx);
     track.set_minimized(!track.is_minimized());
     update_view();
-    Refresh();
+    Refresh(false);
 }
 
 bool TracksView::is_track_selected(int track_idx) const
@@ -1061,10 +1065,13 @@ void TracksView::draw(wxDC& dc) {
     auto order = m_engine.order_list();
     uint32_t lpb = m_engine.lpb();
 
-    // Draw Time Scale (Header)
+    // Draw Time Scale (Header) and the top position ruler.
     dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
     dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-    dc.DrawRectangle(header_w, 0, view_right - header_w, 20);
+    dc.DrawRectangle(header_w, 0, std::max(0, view_right - header_w), kTimelineHeaderHeight);
+    dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_bg_color)));
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_bg_color)));
+    dc.DrawRectangle(header_w, kTimelineHeaderHeight, std::max(0, view_right - header_w), kPositionRulerHeight);
 
     dc.SetTextForeground(ThemeManager::toWxColour(m_engine.m_tracker_text));
     wxFont header_font(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
@@ -1073,10 +1080,17 @@ void TracksView::draw(wxDC& dc) {
     int total_rows = 0;
     size_t current_pos = m_engine.current_order_pos();
     int play_tick = 0;
+    const bool transport_playing = m_engine.transport_state() != TransportState::Stopped;
+    const int stopped_tick = std::max(0, cursor_row());
+    int display_tick = stopped_tick;
+    int loop_start_tick = -1;
+    int loop_end_tick = -1;
+    const bool loop_enabled = m_engine.transport().m_loop_pattern.load();
 
     for (size_t i = 0; i < order.size(); ++i) {
         auto& pat = m_engine.pattern(order[i]);
         int pat_rows = (int)pat.row_count();
+        const int pattern_start_row = total_rows;
         int px = header_w + tick_to_x(total_rows);
         int pat_end_x = px + tick_to_x(pat_rows);
 
@@ -1085,6 +1099,15 @@ void TracksView::draw(wxDC& dc) {
             play_tick += pat_rows;
         } else if (i == current_pos) {
             play_tick += (int)m_engine.current_row();
+        }
+
+        if (loop_enabled &&
+            ((transport_playing && i == current_pos) ||
+             (!transport_playing &&
+              stopped_tick >= pattern_start_row &&
+              stopped_tick < pattern_start_row + pat_rows))) {
+            loop_start_tick = pattern_start_row;
+            loop_end_tick = pattern_start_row + pat_rows;
         }
 
         total_rows += pat_rows;
@@ -1104,19 +1127,78 @@ void TracksView::draw(wxDC& dc) {
 
         // Beat markers
         if (lpb > 0) {
-            for (int r = 0; r < pat_rows; r += lpb) {
+            const int visible_row_start =
+                std::max(0, (int)std::floor((double)(std::max(view_x, header_w) - px) / m_zoom));
+            const int visible_row_end =
+                std::min(pat_rows, (int)std::ceil((double)(view_right - px) / m_zoom) + 1);
+            for (int r = std::max(0, (visible_row_start / (int)lpb) * (int)lpb); r < visible_row_end; r += (int)lpb) {
                 int bx = px + tick_to_x(r);
                 if (bx < view_x || bx >= view_right) continue;
                 dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                dc.DrawLine(bx, 15, bx, 25);
+                dc.DrawLine(bx, 12, bx, kTimelineHeaderHeight);
                 if (r % (lpb * 4) == 0) {
                     wxString bbuf;
                     bbuf.Printf("%d", r / lpb);
-                    dc.DrawText(bbuf, bx + 2, 28);
+                    dc.DrawText(bbuf, bx + 2, kTimelineHeaderHeight + 1);
                 }
             }
         }
     }
+
+    if (transport_playing) {
+        display_tick = play_tick;
+    } else if (loop_enabled && loop_start_tick < 0 && !order.empty()) {
+        int row_accum = 0;
+        for (size_t i = 0; i < order.size(); ++i) {
+            const int pat_rows = (int)m_engine.pattern(order[i]).row_count();
+            if (i + 1 == order.size() || stopped_tick < row_accum + pat_rows) {
+                loop_start_tick = row_accum;
+                loop_end_tick = row_accum + pat_rows;
+                break;
+            }
+            row_accum += pat_rows;
+        }
+    }
+
+    const int ruler_y = kTimelineHeaderHeight + kPositionRulerHeight / 2;
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_text)));
+    dc.DrawLine(header_w, ruler_y, header_w + tick_to_x(total_rows), ruler_y);
+
+    if (loop_enabled && loop_start_tick >= 0 && loop_end_tick > loop_start_tick) {
+        const int loop_start_x = header_w + tick_to_x(loop_start_tick);
+        const int loop_end_x = header_w + tick_to_x(loop_end_tick);
+        const wxColour loop_col = ThemeManager::toWxColour(m_engine.m_selection_color);
+        dc.SetPen(wxPen(loop_col, 2));
+        dc.DrawLine(loop_start_x, ruler_y - 5, loop_end_x, ruler_y - 5);
+        dc.DrawLine(loop_start_x, kTimelineHeaderHeight + 2, loop_start_x, kTracksContentTop - 2);
+        dc.DrawLine(loop_end_x, kTimelineHeaderHeight + 2, loop_end_x, kTracksContentTop - 2);
+        dc.SetBrush(wxBrush(loop_col));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        wxPoint loop_in[] = {
+            wxPoint(loop_start_x, ruler_y - 8),
+            wxPoint(loop_start_x + 8, ruler_y - 5),
+            wxPoint(loop_start_x, ruler_y - 2)
+        };
+        wxPoint loop_out[] = {
+            wxPoint(loop_end_x, ruler_y - 8),
+            wxPoint(loop_end_x - 8, ruler_y - 5),
+            wxPoint(loop_end_x, ruler_y - 2)
+        };
+        dc.DrawPolygon(3, loop_in);
+        dc.DrawPolygon(3, loop_out);
+    }
+
+    const int playhead_x = header_w + tick_to_x(display_tick);
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor), 2));
+    dc.DrawLine(playhead_x, kTimelineHeaderHeight + 1, playhead_x, kTracksContentTop - 2);
+    dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
+    dc.SetPen(*wxTRANSPARENT_PEN);
+    wxPoint playhead_marker[] = {
+        wxPoint(playhead_x - 6, ruler_y + 1),
+        wxPoint(playhead_x + 6, ruler_y + 1),
+        wxPoint(playhead_x, kTracksContentTop - 2)
+    };
+    dc.DrawPolygon(3, playhead_marker);
 
     // Track recording start position
     if (m_engine.is_recording_audio_tracks()) {
@@ -1126,7 +1208,7 @@ void TracksView::draw(wxDC& dc) {
     }
 
     // Draw Tracks
-    int cur_y = 30;
+    int cur_y = kTracksContentTop;
     double bpm = m_engine.tempo();
     double sample_rate = m_engine.sample_rate();
     double samples_per_beat = (sample_rate * 60.0) / bpm;
@@ -1281,7 +1363,11 @@ void TracksView::draw(wxDC& dc) {
                     if (pat_end_x <= view_x || px >= view_right) continue;
 
                     if (lpb > 0) {
-                        for (int r = 0; r < pat_rows; r += lpb) {
+                        const int visible_row_start =
+                            std::max(0, (int)std::floor((double)(std::max(view_x, header_w) - px) / m_zoom));
+                        const int visible_row_end =
+                            std::min(pat_rows, (int)std::ceil((double)(view_right - px) / m_zoom) + 1);
+                        for (int r = std::max(0, (visible_row_start / (int)lpb) * (int)lpb); r < visible_row_end; r += (int)lpb) {
                             const int click_x = px + tick_to_x(r);
                             if (click_x < view_x || click_x >= view_right) continue;
                             const bool accented = (r % (lpb * 4)) == 0;
@@ -1304,6 +1390,7 @@ void TracksView::draw(wxDC& dc) {
                     const auto& sample = sampler->get_sample(sample_idx);
                     if (sample.data) {
                         const int sample_rows = sample_rows_for_display(m_engine, *sample.data);
+                        const double sample_spr = sample_frames_per_row(m_engine, sample.data->sample_rate);
                         const int full_nw = std::max(2, tick_to_x(sample_rows));
                         // Viewport clip: only draw the visible horizontal slice
                         const int skip_px = std::max(0, view_x - header_w);
@@ -1313,9 +1400,9 @@ void TracksView::draw(wxDC& dc) {
                         dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
                         dc.DrawRectangle(header_w, ty + 5, full_nw, track_h_actual - 10);
-                        if (vis_w > 0) {
+                        if (vis_w > 0 && sample_spr > 0.0) {
                             // Compute which samples correspond to the visible slice
-                            const double spp = samples_per_row / m_zoom; // samples per pixel
+                            const double spp = sample_spr / m_zoom; // samples per pixel
                             const size_t s_start = (size_t)(skip_px * spp);
                             const size_t s_end   = s_start + (size_t)(vis_w * spp) + 2;
                             draw_waveform_helper(dc, vis_x, ty + 5, vis_w, track_h_actual - 10,
@@ -1330,9 +1417,10 @@ void TracksView::draw(wxDC& dc) {
                 if (track_obj.is_audio_capture_active() && m_recording_start_tick >= 0) {
                     SampleData* live_sd = track_obj.capture_data();
                     const size_t wp = track_obj.capture_write_pos();
-                    if (live_sd && wp > 0 && samples_per_row > 0.0) {
+                    const double live_spr = live_sd ? sample_frames_per_row(m_engine, live_sd->sample_rate) : 0.0;
+                    if (live_sd && wp > 0 && live_spr > 0.0) {
                         const int rec_x     = header_w + tick_to_x(m_recording_start_tick);
-                        const int full_lw   = std::max(2, (int)((double)wp / samples_per_row * m_zoom));
+                        const int full_lw   = std::max(2, (int)((double)wp / live_spr * m_zoom));
                         // Viewport clip
                         const int l_skip_px = std::max(0, view_x - rec_x);
                         const int l_vis_x   = rec_x + l_skip_px;
@@ -1342,7 +1430,7 @@ void TracksView::draw(wxDC& dc) {
                         dc.SetPen(*wxTRANSPARENT_PEN);
                         dc.DrawRectangle(rec_x, ty + 5, full_lw, track_h_actual - 10);
                         if (l_vis_w > 0) {
-                            const double spp    = samples_per_row / m_zoom;
+                            const double spp    = live_spr / m_zoom;
                             const size_t l_s0   = (size_t)(l_skip_px * spp);
                             const size_t l_send = std::min(wp, l_s0 + (size_t)(l_vis_w * spp) + 2);
                             draw_waveform_helper(dc, l_vis_x, ty + 5, l_vis_w, track_h_actual - 10,
@@ -1372,7 +1460,20 @@ void TracksView::draw(wxDC& dc) {
                 if (pat_end_x <= view_x || px >= view_right) continue;
 
                 size_t num_cols = pat.column_count(pattern_track_idx);
-                for (int r = 0; r < pat_rows; ++r) {
+                int row_start = 0;
+                if (m_zoom > 0.0) {
+                    row_start = std::max(0, (int)std::floor((double)(std::max(view_x, header_w) - px) / m_zoom));
+                    for (size_t c = 0; c < num_cols; ++c) {
+                        for (int prev = row_start - 1; prev >= 0; --prev) {
+                            if (pat.event(pattern_track_idx, (size_t)prev, c).note != 255) {
+                                row_start = std::min(row_start, prev);
+                                break;
+                            }
+                        }
+                    }
+                }
+                const int row_end = std::min(pat_rows, (int)std::ceil((double)(view_right - px) / m_zoom) + 1);
+                for (int r = row_start; r < row_end; ++r) {
                     int nx = px + tick_to_x(r);
                     if (nx >= view_right) break;  // All subsequent rows are also off-screen
 
@@ -1465,11 +1566,8 @@ void TracksView::draw(wxDC& dc) {
     }
 
     // Current Playback Marker
-    if (m_engine.transport_state() != TransportState::Stopped) {
-        int play_x = header_w + tick_to_x(play_tick);
-        dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
-        dc.DrawLine(play_x, 0, play_x, virtual_size.GetHeight());
-    }
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
+    dc.DrawLine(playhead_x, 0, playhead_x, virtual_size.GetHeight());
 
     // Recording region: vertical marker at recording start + shaded region up to play cursor
     if (m_recording_start_tick >= 0 && m_engine.is_recording_audio_tracks()) {
@@ -1511,7 +1609,7 @@ void TracksView::draw(wxDC& dc) {
             auto& sel_track = m_engine.track(content_track_idx >= 0 ? content_track_idx : selected_track_idx);
             auto inst = sel_track.instrument();
             if (inst && inst->type() == InstrumentType::Sampler) {
-                int cur_y_pos = 30;
+                int cur_y_pos = kTracksContentTop;
                 for (int t = 0; t < selected_track_idx; ++t) {
                     cur_y_pos += get_track_height(t);
                 }
@@ -1578,7 +1676,7 @@ void TracksView::OnMouseDown(wxMouseEvent& event) {
     
     // Determine which track was clicked
     int num_tracks = (int)m_engine.track_count();
-    int cur_y = 30;
+    int cur_y = kTracksContentTop;
     int clicked_track = -1;
     
     for (int t = 0; t < num_tracks; ++t) {
@@ -1600,42 +1698,42 @@ void TracksView::OnMouseDown(wxMouseEvent& event) {
                 if (control_rect(ty, track_h, HeaderControl::Mute, track_has_record).Contains(x, y)) {
                     track.set_mute(!track.muted());
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (control_rect(ty, track_h, HeaderControl::Solo, track_has_record).Contains(x, y)) {
                     track.set_solo(!track.solo());
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (track_has_record && control_rect(ty, track_h, HeaderControl::Record, track_has_record).Contains(x, y)) {
                     m_engine.set_audio_track_armed((size_t)t, !m_engine.is_audio_track_armed((size_t)t));
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (control_rect(ty, track_h, HeaderControl::VolDown, track_has_record).Contains(x, y)) {
                     track.set_volume(std::max(0.0f, track.volume() - 0.05f));
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (control_rect(ty, track_h, HeaderControl::VolUp, track_has_record).Contains(x, y)) {
                     track.set_volume(std::min(1.0f, track.volume() + 0.05f));
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (control_rect(ty, track_h, HeaderControl::PanLeft, track_has_record).Contains(x, y)) {
                     track.set_pan(track.get_pan() - 0.1f);
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
                 if (control_rect(ty, track_h, HeaderControl::PanRight, track_has_record).Contains(x, y)) {
                     track.set_pan(track.get_pan() + 0.1f);
                     m_engine.mark_dirty();
-                    Refresh();
+                    Refresh(false);
                     return;
                 }
             }
@@ -1660,7 +1758,7 @@ void TracksView::OnMouseDown(wxMouseEvent& event) {
         } else {
             m_is_selecting = false;
         }
-        Refresh();
+        Refresh(false);
     }
 }
 
@@ -1670,7 +1768,7 @@ void TracksView::OnMouseDrag(wxMouseEvent& event) {
         CalcUnscrolledPosition(event.GetX(), event.GetY(), &x, &y);
         int header_w = kTrackHeaderWidth;
         m_sel_end_tick = x_to_tick(x - header_w);
-        Refresh();
+        Refresh(false);
     }
 }
 
@@ -1715,14 +1813,14 @@ void TracksView::view_selection() {
 
 void TracksView::update_view() {
     int num_tracks = (int)m_engine.track_count();
-    int total_h = 30;
+    int total_h = kTracksContentTop;
     for (int t = 0; t < num_tracks; ++t) {
         total_h += get_track_height(t);
     }
     int total_w = kTrackHeaderWidth + tick_to_x(get_total_ticks()) + 50;
     total_h += 50;
     SetVirtualSize(total_w, total_h);
-    Refresh();
+    Refresh(false);
 }
 
 void TracksView::OnMouseRightClick(wxMouseEvent& event) {

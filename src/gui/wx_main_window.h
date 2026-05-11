@@ -51,6 +51,9 @@ public:
 
     Track& track(size_t index);
     int get_cursor_row() const;
+    int get_tracker_song_row() const;
+    int get_selected_song_row() const;
+    bool start_playback_from_selected_position();
     int selected_tab() const { return m_selected_tab; }
     int get_tracks_cursor_row() const;
 

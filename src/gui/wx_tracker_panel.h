@@ -55,6 +55,7 @@ public:
     void update();
     void grab_focus();
     int get_cursor_row() const;
+    int get_absolute_cursor_row() const;
     TrackerView* get_tracker_view() const { return m_tracker; }
     void handle_note_action(Action action);
 

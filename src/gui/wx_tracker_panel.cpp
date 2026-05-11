@@ -366,6 +366,18 @@ int TrackerPanel::get_cursor_row() const {
     return 0;
 }
 
+int TrackerPanel::get_absolute_cursor_row() const {
+    const int cursor_row = std::max(0, get_cursor_row());
+    const auto order = m_engine.order_list();
+    const size_t edit_pos = m_engine.m_edit_order_pos.load();
+
+    size_t absolute_row = (size_t)cursor_row;
+    for (size_t i = 0; i < edit_pos && i < order.size(); ++i) {
+        absolute_row += m_engine.pattern(order[i]).row_count();
+    }
+    return (int)absolute_row;
+}
+
 void TrackerPanel::handle_note_action(Action action) {
     if (m_tracker) {
         m_tracker->handle_action(action);

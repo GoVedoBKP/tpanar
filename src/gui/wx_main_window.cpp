@@ -209,9 +209,34 @@ int WxMainWindow::get_cursor_row() const {
     return 0;
 }
 
+int WxMainWindow::get_tracker_song_row() const {
+    if (m_tracker_panel) return m_tracker_panel->get_absolute_cursor_row();
+    return 0;
+}
+
 int WxMainWindow::get_tracks_cursor_row() const {
     if (m_tracks_panel) return m_tracks_panel->get_cursor_row();
     return 0;
+}
+
+int WxMainWindow::get_selected_song_row() const {
+    if (m_selected_tab == 1) return get_tracker_song_row();
+    if (m_selected_tab == 2) return get_tracks_cursor_row();
+    return -1;
+}
+
+bool WxMainWindow::start_playback_from_selected_position() {
+    if (m_engine.transport_state() != TransportState::Stopped) {
+        m_engine.play();
+        return true;
+    }
+
+    const int song_row = get_selected_song_row();
+    if (song_row >= 0) {
+        m_engine.play_from_absolute_row((size_t)song_row);
+        return true;
+    }
+    return false;
 }
 
 void WxMainWindow::OnTimer(wxTimerEvent& event) {
@@ -289,10 +314,17 @@ void WxMainWindow::OnCharHook(wxKeyEvent& event) {
     }
 
     switch (action) {
-        case Action::Play: m_engine.play(); break;
+        case Action::Play:
+            if (!start_playback_from_selected_position()) m_engine.play();
+            break;
         case Action::PlaySong: m_engine.play_song(); break;
         case Action::PlayPattern: m_engine.play_pattern(); break;
-        case Action::PlayFromPosition: m_engine.play_from_position(m_engine.current_row()); break;
+        case Action::PlayFromPosition: {
+            const int song_row = get_selected_song_row();
+            if (song_row >= 0) m_engine.play_from_absolute_row((size_t)song_row);
+            else m_engine.play_from_position(m_engine.current_row());
+            break;
+        }
         case Action::Stop: m_engine.stop(); break;
         case Action::Undo: 
             if (m_selected_tab == 1 && m_tracker_panel) m_tracker_panel->get_tracker_view()->handle_action(Action::Undo);
