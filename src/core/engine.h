@@ -105,6 +105,7 @@ public:
     void play_from_position(size_t row);
     void play_from_absolute_row(size_t absolute_row);
     void auto_seek();
+    void reset_play_counters(size_t absolute_row = 0);
 
     tpanar_ns::Transport& transport();
     const tpanar_ns::Transport& transport() const;

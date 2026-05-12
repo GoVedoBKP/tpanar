@@ -921,6 +921,25 @@ void Engine::play() {
     transport().play();
 }
 
+void Engine::reset_play_counters(size_t absolute_row)
+{
+    // Reset tick counter so the first process_tick() fires at sample 0 of the
+    // new playback session instead of being offset by leftover state.
+    m_samples_until_next_tick = 0;
+
+    // Align the metronome beat counter to the beat phase of absolute_row so
+    // the first click fires at the correct sample relative to the seek point.
+    const size_t spb = m_timing.samples_per_beat();
+    if (spb > 0) {
+        const size_t abs_sample = absolute_row * m_timing.samples_per_row();
+        const size_t beat_phase = abs_sample % spb;
+        m_samples_until_next_beat = (beat_phase == 0) ? 0 : (spb - beat_phase);
+    } else {
+        m_samples_until_next_beat = 0;
+    }
+    m_metronome.reset();
+}
+
 void Engine::play_song() {
     stop();
     m_order_pos.store(0);
@@ -929,6 +948,7 @@ void Engine::play_song() {
     }
     m_current_row = 0;
     m_current_tick = 0;
+    reset_play_counters(0);
     set_loop(false);
     auto_seek();
     start();
@@ -938,6 +958,7 @@ void Engine::play_pattern() {
     stop();
     m_current_row = 0;
     m_current_tick = 0;
+    reset_play_counters(0);
     set_loop(true);
     auto_seek();
     start();
@@ -947,6 +968,7 @@ void Engine::play_from_position(size_t row) {
     stop();
     m_current_row = row;
     m_current_tick = 0;
+    reset_play_counters(absolute_song_row(*this, m_order_pos.load(), row));
     set_loop(true);
     auto_seek();
     start();
@@ -958,6 +980,7 @@ void Engine::play_from_absolute_row(size_t absolute_row) {
     if (m_order.empty()) {
         m_current_row = 0;
         m_current_tick = 0;
+        reset_play_counters(0);
         auto_seek();
         start();
         return;
@@ -993,6 +1016,7 @@ void Engine::play_from_absolute_row(size_t absolute_row) {
     set_active_pattern(m_order[target_order]);
     m_current_row = target_row;
     m_current_tick = 0;
+    reset_play_counters(absolute_row);
     auto_seek();
     start();
 }
@@ -1029,6 +1053,7 @@ void Engine::play_punch_in()
     set_active_pattern(m_order[target_order]);
     m_current_row = remaining_rows;
     m_current_tick = 0;
+    reset_play_counters((size_t)start_row);
     auto_seek();
 
     // Arm recording — capture will start only when process_tick() hits punch_in_row.
@@ -1053,6 +1078,7 @@ void Engine::set_play_position(size_t order_pos, size_t row) {
     m_current_tick = 0;
     if (was_playing) {
         transport().set_loop(was_looping);
+        reset_play_counters(absolute_song_row(*this, order_pos, row));
         auto_seek();
         start();
     }
@@ -2868,7 +2894,7 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
     set_active_pattern(m_order[0]);
     m_current_row = 0;
     m_current_tick = 0;
-    m_samples_until_next_tick = 0;
+    reset_play_counters(0);
     transport().set_loop(false);
     auto_seek();
 
