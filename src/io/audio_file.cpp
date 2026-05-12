@@ -57,8 +57,11 @@ namespace tpanar_ns
                              const ::std::vector<float>& right,
                              uint32_t sample_rate)
     {
+        if (left.empty()) return false;
+
+        const bool is_mono = right.empty();
         SF_INFO info{};
-        info.channels = 2;
+        info.channels = is_mono ? 1 : 2;
         info.samplerate = sample_rate;
         info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 
@@ -66,18 +69,20 @@ namespace tpanar_ns
         if (!file)
             return false;
 
-        size_t frames = ::std::min(left.size(), right.size());
-        ::std::vector<float> buffer(frames * 2);
-
-        for (size_t i = 0; i < frames; ++i)
-        {
-            buffer[i * 2]     = left[i];
-            buffer[i * 2 + 1] = right[i];
+        if (is_mono) {
+            sf_writef_float(file, left.data(), (sf_count_t)left.size());
+        } else {
+            size_t frames = ::std::min(left.size(), right.size());
+            ::std::vector<float> buffer(frames * 2);
+            for (size_t i = 0; i < frames; ++i)
+            {
+                buffer[i * 2]     = left[i];
+                buffer[i * 2 + 1] = right[i];
+            }
+            sf_writef_float(file, buffer.data(), (sf_count_t)frames);
         }
 
-        sf_writef_float(file, buffer.data(), frames);
         sf_close(file);
-
         return true;
     }
 

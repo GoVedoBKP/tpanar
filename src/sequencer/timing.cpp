@@ -5,6 +5,7 @@
 
 #include "timing.h"
 #include <cstddef>
+#include <cmath>
 
 namespace tpanar_ns
 {
@@ -29,21 +30,31 @@ namespace tpanar_ns
 
     size_t Timing::samples_per_tick() const
     {
+        // 1 beat = 60 / BPM seconds.
+        // Tpanar assumes 24 ticks per beat (Speed 6 * LPB 4).
+        // So 1 tick = 60 / (BPM * 24) = 2.5 / BPM seconds.
         double tick_sec = 2.5 / double(m_bpm);
-        return static_cast<size_t>(m_sample_rate * tick_sec);
+        return static_cast<size_t>(std::lround(m_sample_rate * tick_sec));
     }
 
     size_t Timing::samples_per_row() const
     {
-        return samples_per_tick() * m_speed;
+        // Calculate directly to avoid accumulating tick-level rounding errors.
+        double row_sec = (2.5 * double(m_speed)) / double(m_bpm);
+        return static_cast<size_t>(std::lround(m_sample_rate * row_sec));
     }
+
     size_t Timing::samples_per_beat() const
     {
-        return samples_per_row() * m_lpb;
+        // Calculate directly. 
+        // Note: In Tpanar, LPB is 'rows per beat marker', and row duration is fixed by 'speed'.
+        double beat_sec = (2.5 * double(m_speed) * double(m_lpb)) / double(m_bpm);
+        return static_cast<size_t>(std::lround(m_sample_rate * beat_sec));
     }
 
     size_t Timing::samples_per_bar() const
     {
+        // Assume 4 beats per bar.
         return samples_per_beat() * 4;
     }
 

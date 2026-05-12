@@ -457,7 +457,7 @@ InstrumentPanel::InstrumentPanel(wxWindow* parent, Engine& engine)
     m_vu_timer->Start(kInputMeterIntervalMs);
 
     // Processing Controls - Using a FlexGridSizer for better alignment
-    wxFlexGridSizer* proc_sizer = new wxFlexGridSizer(4, 2, 5, 5);
+    wxFlexGridSizer* proc_sizer = new wxFlexGridSizer(5, 2, 5, 5);
     proc_sizer->AddGrowableCol(1, 1);
 
     // Row 1: Volume
@@ -514,7 +514,15 @@ InstrumentPanel::InstrumentPanel(wxWindow* parent, Engine& engine)
     transform_sizer->Add(m_stretch_btn, 0);
     proc_sizer->Add(transform_sizer, 0, wxEXPAND);
 
-    // Row 4: Editing
+    // Row 4: Channel format
+    proc_sizer->Add(new wxStaticText(m_sampler_editor, wxID_ANY, "Channels:"), 0, wxALIGN_CENTER_VERTICAL);
+    wxBoxSizer* channels_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_sample_fmt_ch = new wxChoice(m_sampler_editor, wxID_ANY);
+    m_sample_fmt_ch->Bind(wxEVT_CHOICE, &InstrumentPanel::on_sample_fmt, this);
+    channels_sizer->Add(m_sample_fmt_ch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 2);
+    proc_sizer->Add(channels_sizer, 0, wxEXPAND);
+
+    // Row 5: Editing
     proc_sizer->Add(new wxStaticText(m_sampler_editor, wxID_ANY, "Edit:"), 0, wxALIGN_CENTER_VERTICAL);
     wxBoxSizer* edit_sizer = new wxBoxSizer(wxHORIZONTAL);
     m_silence_btn = new wxButton(m_sampler_editor, wxID_ANY, "Silence", wxDefaultPosition, wxSize(-1, 25));
@@ -582,17 +590,6 @@ InstrumentPanel::InstrumentPanel(wxWindow* parent, Engine& engine)
 
     m_sampler_editor->SetSizer(sampler_sizer);
     
-    // Create m_sample_fmt_ch early so it can be used in update_editor
-    m_sample_fmt_ch = new wxChoice(m_sampler_editor, wxID_ANY);
-    m_sample_fmt_ch->Append("Stereo");
-    m_sample_fmt_ch->Append("Stereo -> Mono (L)");
-    m_sample_fmt_ch->Append("Stereo -> Mono (R)");
-    m_sample_fmt_ch->Append("Stereo -> Mono (Mix)");
-    m_sample_fmt_ch->Append("Mono -> Stereo");
-    m_sample_fmt_ch->SetSelection(0);
-    m_sample_fmt_ch->Bind(wxEVT_CHOICE, &InstrumentPanel::on_sample_fmt, this);
-    m_sample_fmt_ch->Hide(); // Will be shown in sample rows
-
     right_sizer->Add(m_sampler_editor, 1, wxEXPAND | wxALL, 2);
 
     // 2. SoundFont Editor
@@ -939,18 +936,30 @@ void InstrumentPanel::on_inst_select_idx(int idx) {
 }
 
 void InstrumentPanel::update_editor() {
-    m_sampler_editor->Hide();
-    m_sfont_editor->Hide();
-    if (m_sfz_editor) m_sfz_editor->Hide();
-    m_plugin_editor->Hide();
-    m_midi_editor->Hide();
+    wxWindow* active_editor = nullptr;
+    wxSizer* right_sizer = m_right_panel ? m_right_panel->GetSizer() : nullptr;
+    auto set_editor_visible = [right_sizer](wxWindow* editor, bool visible) {
+        if (!editor) return;
+        editor->Show(visible);
+        if (right_sizer) {
+            right_sizer->Show(editor, visible, true);
+        }
+    };
+
+    if (m_right_panel) m_right_panel->Freeze();
+    set_editor_visible(m_sampler_editor, false);
+    set_editor_visible(m_sfont_editor, false);
+    set_editor_visible(m_sfz_editor, false);
+    set_editor_visible(m_plugin_editor, false);
+    set_editor_visible(m_midi_editor, false);
     if (m_sample_name_label) m_sample_name_label->SetLabel("");
 
     if (m_selected_instrument >= 0 && m_selected_instrument < (int)m_engine.instrument_count()) {
         auto& inst = m_engine.instrument(m_selected_instrument);
         
         if (inst.type() == InstrumentType::Sampler) {
-            m_sampler_editor->Show();
+            set_editor_visible(m_sampler_editor, true);
+            active_editor = m_sampler_editor;
             SampleInstrument* sampler = static_cast<SampleInstrument*>(&inst);
 
             if (m_preview_fx_check) {
@@ -962,10 +971,7 @@ void InstrumentPanel::update_editor() {
                 if (!on_track) m_preview_fx_check->SetValue(false);
             }
             
-            // Safety: Reparent the format choice back to the editor before clearing the scroll panel
-            // to avoid it being destroyed when the rows are deleted.
-            m_sample_fmt_ch->Reparent(m_sampler_editor);
-            m_sample_fmt_ch->Hide();
+            m_sample_fmt_ch->Show();
 
             if (m_sample_scroll->GetSizer()) {
                 m_sample_scroll->GetSizer()->Clear(true);
@@ -1065,12 +1071,6 @@ void InstrumentPanel::update_editor() {
                 });
                 rs->Add(rem, 0, wxALIGN_CENTER_VERTICAL | wxALL, 0);
                 
-                if ((int)i == m_selected_sample) {
-                    m_sample_fmt_ch->Reparent(row);
-                    m_sample_fmt_ch->Show();
-                    rs->Add(m_sample_fmt_ch, 0, wxALIGN_CENTER_VERTICAL | wxALL, 0);
-                }
-                
                 row->SetSizer(rs);
                 m_sample_scroll->GetSizer()->Add(row, 0, wxEXPAND | wxBOTTOM, 1);
             }
@@ -1085,12 +1085,33 @@ void InstrumentPanel::update_editor() {
                 // Update format choice based on current sample
                 auto const& sample = sampler->get_sample(m_selected_sample);
                 if (sample.data) {
-                    m_sample_fmt_ch->SetSelection(sample.data->right.empty() ? 1 : 0);
+                    m_sample_fmt_ch->Clear();
+                    if (sample.data->right.empty()) {
+                        m_sample_fmt_ch->Append("Mono");
+                        m_sample_fmt_ch->Append("Mono -> Stereo");
+                    } else {
+                        m_sample_fmt_ch->Append("Stereo");
+                        m_sample_fmt_ch->Append("Stereo -> Keep Left");
+                        m_sample_fmt_ch->Append("Stereo -> Keep Right");
+                        m_sample_fmt_ch->Append("Stereo -> Mono Mix");
+                    }
+                    m_sample_fmt_ch->SetSelection(0);
+                    m_sample_fmt_ch->Enable();
+                } else {
+                    m_sample_fmt_ch->Clear();
+                    m_sample_fmt_ch->Append("No sample");
+                    m_sample_fmt_ch->SetSelection(0);
+                    m_sample_fmt_ch->Disable();
                 }
             } else {
                 m_undo_btn->Disable();
                 m_redo_btn->Disable();
+                m_sample_fmt_ch->Clear();
+                m_sample_fmt_ch->Append("No sample selected");
+                m_sample_fmt_ch->SetSelection(0);
+                m_sample_fmt_ch->Disable();
             }
+            m_sample_fmt_ch->Show();
 
             m_waveform_view->set_color(m_engine.m_waveform_color);
             if (m_selected_sample >= 0 && m_selected_sample < (int)sampler->sample_count()) {
@@ -1105,7 +1126,8 @@ void InstrumentPanel::update_editor() {
             }
         } 
         else if (inst.type() == InstrumentType::SoundFont) {
-            m_sfont_editor->Show();
+            set_editor_visible(m_sfont_editor, true);
+            active_editor = m_sfont_editor;
             SoundFontInstrument* sf = static_cast<SoundFontInstrument*>(&inst);
             m_sfont_browser->Clear();
             const auto& presets = sf->presets();
@@ -1119,7 +1141,8 @@ void InstrumentPanel::update_editor() {
             m_sfont_editor->Layout();
         }
         else if (inst.type() == InstrumentType::SFZ && m_sfz_editor) {
-            m_sfz_editor->Show();
+            set_editor_visible(m_sfz_editor, true);
+            active_editor = m_sfz_editor;
             SfzInstrument* sfz = static_cast<SfzInstrument*>(&inst);
             // Path label
             m_sfz_path_label->SetLabel(sfz->path().empty() ? "(no file)" :
@@ -1136,7 +1159,8 @@ void InstrumentPanel::update_editor() {
             m_sfz_editor->Layout();
         }
         else if (inst.type() == InstrumentType::Midi) {
-            m_midi_editor->Show();
+            set_editor_visible(m_midi_editor, true);
+            active_editor = m_midi_editor;
             MidiInstrument* midi = static_cast<MidiInstrument*>(&inst);
             m_midi_channel->SetValue(midi->channel() + 1);
             m_midi_program->SetValue(midi->program());
@@ -1160,7 +1184,8 @@ void InstrumentPanel::update_editor() {
             m_midi_editor->Layout();
         }
         else if (inst.type() == InstrumentType::Plugin) {
-            m_plugin_editor->Show();
+            set_editor_visible(m_plugin_editor, true);
+            active_editor = m_plugin_editor;
             if (m_plugin_browser->GetCount() == 0) {
                 wxCommandEvent dummy; on_plugin_scan(dummy);
             }
@@ -1242,8 +1267,19 @@ void InstrumentPanel::update_editor() {
             m_plugin_editor->Layout();
         }
     }
+    if (active_editor) {
+        active_editor->Layout();
+        active_editor->Refresh();
+    }
+    if (right_sizer) {
+        right_sizer->Layout();
+    }
     m_right_panel->Layout();
+    Layout();
+    if (GetParent()) GetParent()->Layout();
     m_right_panel->Refresh();
+    m_right_panel->Update();
+    if (m_right_panel) m_right_panel->Thaw();
 }
 
 void InstrumentPanel::on_new(wxCommandEvent& event) {
@@ -1479,8 +1515,30 @@ void InstrumentPanel::on_sample_fmt(wxCommandEvent& event) {
     if (m_selected_sample >= 0 && m_selected_instrument >= 0) {
         auto& inst = m_engine.instrument(m_selected_instrument);
         if (inst.type() == InstrumentType::Sampler) {
-             static_cast<SampleInstrument*>(&inst)->push_undo(m_selected_sample);
-             static_cast<SampleInstrument*>(&inst)->convert_sample_format(m_selected_sample, (SampleFormatAction)event.GetSelection());
+             auto* sampler = static_cast<SampleInstrument*>(&inst);
+             if ((size_t)m_selected_sample >= sampler->sample_count()) return;
+             const auto& sample = sampler->get_sample((size_t)m_selected_sample);
+             if (!sample.data) return;
+
+             const bool is_mono = sample.data->right.empty();
+             const int selection = event.GetSelection();
+             if (selection <= 0) return;
+
+             SampleFormatAction action = SampleFormatAction::Stereo;
+             if (is_mono) {
+                 if (selection != 1) return;
+                 action = SampleFormatAction::MonoToStereo;
+             } else {
+                 switch (selection) {
+                     case 1: action = SampleFormatAction::StereoToMonoL; break;
+                     case 2: action = SampleFormatAction::StereoToMonoR; break;
+                     case 3: action = SampleFormatAction::StereoToMonoMix; break;
+                     default: return;
+                 }
+             }
+
+             sampler->push_undo(m_selected_sample);
+             sampler->convert_sample_format(m_selected_sample, action);
              m_engine.refresh_timeline_audio_tracks();
              update_editor();
         }

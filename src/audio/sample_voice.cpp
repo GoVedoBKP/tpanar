@@ -96,7 +96,7 @@ namespace tpanar_ns
                               float* out_r,
                               size_t frames)
     {
-        if (!m_env.active() || !m_sample)
+        if (!m_env.active() || !m_sample || m_sample->left.size() < 2)
         {
             m_active = false;
             return;

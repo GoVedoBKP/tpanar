@@ -217,7 +217,7 @@ void SettingsPanel::init_audio_grp(int x, int y, int w, int h) {
     m_record_latency->SetToolTip(
         "Trim this many samples from the start of each recording to compensate for\n"
         "input hardware latency.  Typical value = JACK buffer size (one period).\n"
-        "Increase if recorded audio appears early; decrease if it appears late.");
+        "Increase if recorded audio appears late; decrease if it appears early.");
     m_record_latency->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent&) {
         m_engine.set_record_latency_samples(m_record_latency->GetValue());
         m_engine.save_config();

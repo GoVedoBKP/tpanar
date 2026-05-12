@@ -25,6 +25,7 @@
 
 #include "../sequencer/pattern.h"
 #include "../core/key_bindings.h"
+#include "../edit/cmd_edit_block.h"
 
 namespace tpanar_ns {
 
@@ -73,6 +74,12 @@ private:
     int cursor_abs_field() const;
     void set_cursor_from_abs_field(int track, int abs_field);
     void sync_record_track_from_cursor();
+    size_t pattern_field_index(int track, int abs_field) const;
+    uint8_t tracker_field_value(int track, int row, int abs_field) const;
+    void push_tracker_field_edit(std::vector<CmdEditBlock::CellEdit>& edits,
+                                 int track, int row, int abs_field, uint8_t new_value) const;
+    void clear_note_and_volume(std::vector<CmdEditBlock::CellEdit>& edits,
+                               int track, int row, int note_abs_field) const;
     uint8_t sanitize_field_value(int track, int abs_field, uint8_t value) const;
     void delete_current_field();
     void clamp_cursor();

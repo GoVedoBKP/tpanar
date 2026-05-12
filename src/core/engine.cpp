@@ -266,6 +266,7 @@ bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std
         }
 
         const double time_seconds = (double)centers[onset_frame] / (double)sample_rate;
+        // Use double-precision math to find the fractional row, then round to the nearest tracker row.
         const size_t absolute_row = (size_t)std::llround(time_seconds * engine_rows_per_second);
         if (absolute_row >= song_rows) continue;
 
@@ -582,18 +583,23 @@ void refresh_audio_track_sources(Engine& engine)
     }
 }
 
-size_t longest_audio_track_samples(const Engine& engine)
+size_t longest_timeline_track_samples(const Engine& engine)
 {
     size_t longest = 0;
     for (size_t i = 0; i < engine.track_count(); ++i) {
-        const Track& track = engine.track(i);
-        if (track.kind() != TrackKind::Audio) continue;
+        if (!is_timeline_sample_track(engine, i)) continue;
 
         const auto sample = resolve_audio_track_sample(engine, i);
         if (!sample) continue;
 
-        longest = std::max(longest, sample->left.size());
-        longest = std::max(longest, sample->right.size());
+        const size_t source_frames = std::max(sample->left.size(), sample->right.size());
+        if (source_frames == 0) continue;
+
+        const double source_rate =
+            (sample->sample_rate > 0) ? (double)sample->sample_rate : (double)engine.sample_rate();
+        const double engine_rate = (double)engine.sample_rate();
+        const size_t output_frames = (size_t)std::ceil((double)source_frames * engine_rate / source_rate);
+        longest = std::max(longest, output_frames);
     }
     return longest;
 }
@@ -1979,7 +1985,7 @@ void Engine::sync_single_pattern_to_longest_audio_track()
         return;
     }
 
-    const size_t longest_samples = longest_audio_track_samples(*this);
+    const size_t longest_samples = longest_timeline_track_samples(*this);
     if (longest_samples == 0) {
         return;
     }
@@ -2337,13 +2343,13 @@ void Engine::start_armed_audio_recording()
     m_is_recording_audio_tracks.store(started_any, std::memory_order_release);
     m_audio_record_capture_enabled.store(false, std::memory_order_release);
 
-    // If punch-in markers are set, record where capture should begin; will be
-    // enabled by process_tick() when the punch-in row is reached.
-    // Otherwise clear so stop_armed_audio_recording knows it's not a punch session.
+    // Record where capture should begin. If punch-in markers are set, 
+    // it will be enabled by process_tick() when the punch-in row is reached.
+    // Otherwise, it starts immediately at the current transport row.
     if (m_punch_in_row.load(std::memory_order_relaxed) >= 0)
         m_punch_captured_start_row.store(-2, std::memory_order_relaxed); // -2 = punch pending
     else
-        m_punch_captured_start_row.store(-1, std::memory_order_relaxed);
+        m_punch_captured_start_row.store((int)m_current_row, std::memory_order_relaxed);
 }
 
 void Engine::stop_armed_audio_recording(bool commit)
@@ -2825,8 +2831,10 @@ size_t Engine::total_song_samples() const {
             total_rows += m_patterns[pat_idx]->row_count();
         }
     }
-    // BPM/Speed might change during playback, but this is a base estimate
-    return total_rows * m_timing.samples_per_row(); 
+    const size_t pattern_samples = total_rows * m_timing.samples_per_row();
+    const size_t audio_samples = longest_timeline_track_samples(*this);
+    // BPM/Speed might change during playback, but this is a base estimate.
+    return std::max(pattern_samples, audio_samples);
 }
 
 bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
@@ -2844,12 +2852,13 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
 
     m_is_exporting.store(true);
     m_export_progress.store(0.0f);
-    m_master.m_export_mute.store(true);
-
     // Prepare for rendering
     stop();
-    m_sample_rate = opts.sample_rate;
-    m_timing.set_sample_rate(opts.sample_rate);
+    // Drain the command queue: stop() pushes a Stop command; if left pending,
+    // process_commands() inside render_block_multi would stop the transport on
+    // the very first render block, causing an extremely short export.
+    process_commands();
+    propagate_sample_rate(opts.sample_rate);
 
     // Export always covers the full song, ignoring any loop range
     m_order_start.store(0);
@@ -2861,6 +2870,7 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
     m_current_tick = 0;
     m_samples_until_next_tick = 0;
     transport().set_loop(false);
+    auto_seek();
 
     // Estimate length
     size_t total_frames = total_song_samples();
@@ -2869,8 +2879,7 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
     if (total_frames == 0) {
         m_order_start.store(old_order_start);
         m_order_end.store(old_order_end);
-        m_sample_rate = old_sr;
-        m_timing.set_sample_rate(old_sr);
+        propagate_sample_rate(old_sr);
         m_order_pos.store(old_order_pos);
         if (old_order_pos < m_order.size()) set_active_pattern(m_order[old_order_pos]);
         m_current_row = old_row;
@@ -2878,7 +2887,6 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
         transport().set_loop(old_loop);
         if (was_playing) start();
         m_is_exporting.store(false);
-        m_master.m_export_mute.store(false);
         return false;
     }
 
@@ -3032,8 +3040,7 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
 
     // Restore state
     stop();
-    m_sample_rate = old_sr;
-    m_timing.set_sample_rate(old_sr);
+    propagate_sample_rate(old_sr);
     m_order_start.store(old_order_start);
     m_order_end.store(old_order_end);
     m_order_pos.store(old_order_pos);
@@ -3044,7 +3051,6 @@ bool Engine::render_to_wav(const std::string& path, const ExportOptions& opts) {
     if (was_playing) start();
 
     m_is_exporting.store(false);
-    m_master.m_export_mute.store(false);
     m_export_progress.store(1.0f);
 
     return success;

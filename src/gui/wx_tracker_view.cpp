@@ -221,6 +221,53 @@ void TrackerView::sync_record_track_from_cursor() {
     }
 }
 
+size_t TrackerView::pattern_field_index(int track, int abs_field) const {
+    if (!m_pattern || is_tempo_cell(track)) return 0;
+    const int actual_track = actual_track_index(track);
+    const int num_cols = (actual_track >= 0) ? tracker_column_count(*m_pattern, actual_track) : 0;
+    if (num_cols <= 0) return 0;
+
+    const int clamped_field = std::max(0, std::min(abs_field, num_cols * kFieldsPerNoteColumn - 1));
+    const int col = clamped_field / kFieldsPerNoteColumn;
+    const int field = clamped_field % kFieldsPerNoteColumn;
+    return (size_t)(col * 3 + (field == 0 ? 0 : 2));
+}
+
+uint8_t TrackerView::tracker_field_value(int track, int row, int abs_field) const {
+    if (!m_pattern) return 0;
+    const int actual_track = actual_track_index(track);
+    if (actual_track < 0 || row < 0 || row >= (int)m_pattern->row_count()) return 0;
+    if (is_tempo_cell(track)) return get_tempo_value(row);
+    return m_pattern->get_field((size_t)actual_track, (size_t)row, pattern_field_index(track, abs_field));
+}
+
+void TrackerView::push_tracker_field_edit(std::vector<CmdEditBlock::CellEdit>& edits,
+                                          int track, int row, int abs_field, uint8_t new_value) const {
+    if (!m_pattern) return;
+    const int actual_track = actual_track_index(track);
+    if (actual_track < 0 || row < 0 || row >= (int)m_pattern->row_count()) return;
+
+    const size_t pat_field = is_tempo_cell(track) ? 0 : pattern_field_index(track, abs_field);
+    const uint8_t old_value = is_tempo_cell(track)
+        ? get_tempo_value(row)
+        : m_pattern->get_field((size_t)actual_track, (size_t)row, pat_field);
+    if (old_value == new_value) return;
+
+    for (auto& edit : edits) {
+        if (edit.track == (size_t)actual_track && edit.row == (size_t)row && edit.field == pat_field) {
+            edit.new_val = new_value;
+            return;
+        }
+    }
+    edits.push_back({(size_t)actual_track, (size_t)row, pat_field, old_value, new_value});
+}
+
+void TrackerView::clear_note_and_volume(std::vector<CmdEditBlock::CellEdit>& edits,
+                                        int track, int row, int note_abs_field) const {
+    push_tracker_field_edit(edits, track, row, note_abs_field, 255);
+    push_tracker_field_edit(edits, track, row, note_abs_field + 1, 255);
+}
+
 uint8_t TrackerView::sanitize_field_value(int track, int abs_field, uint8_t value) const {
     const int actual_track = actual_track_index(track);
     if (actual_track >= 0 && m_engine.is_tempo_track((size_t)actual_track) && abs_field == 0) {
@@ -566,6 +613,17 @@ void TrackerView::OnKeyDown(wxKeyEvent& event) {
 
             // Handle hex input for fields that support it
             if (m_engine.m_record_enabled.load() && m_cursor_field == 1) {
+                if (key == '0' || key == '.') {
+                    std::vector<CmdEditBlock::CellEdit> edits;
+                    push_tracker_field_edit(edits, m_cursor_track, m_cursor_row, cursor_abs_field(),
+                                            sanitize_field_value(m_cursor_track, cursor_abs_field(), 255));
+                    if (!edits.empty()) {
+                        m_engine.undo_stack().execute(std::make_unique<CmdEditBlock>(*m_pattern, edits));
+                        Refresh();
+                    }
+                    return;
+                }
+
                 int hex_val = -1;
                 if (key >= '0' && key <= '9') hex_val = key - '0';
                 else if (key >= 'A' && key <= 'F') hex_val = 10 + (key - 'A');
@@ -573,9 +631,8 @@ void TrackerView::OnKeyDown(wxKeyEvent& event) {
 
                 if (hex_val != -1) {
                     int abs_f = cursor_abs_field();
-                    const int actual_track = actual_track_index(m_cursor_track);
-                    if (actual_track < 0) return;
-                    uint8_t current_v = m_pattern->get_field((size_t)actual_track, (size_t)m_cursor_row, (size_t)abs_f);
+                    if (actual_track_index(m_cursor_track) < 0) return;
+                    uint8_t current_v = tracker_field_value(m_cursor_track, m_cursor_row, abs_f);
                     
                     // Simple "shift and add" for 2-digit hex fields
                     uint8_t new_v = (uint8_t)((current_v << 4) | (hex_val & 0x0F));
@@ -584,7 +641,7 @@ void TrackerView::OnKeyDown(wxKeyEvent& event) {
 
                     if (current_v != new_v) {
                         std::vector<CmdEditBlock::CellEdit> edits;
-                        edits.push_back({(size_t)actual_track, (size_t)m_cursor_row, (size_t)abs_f, current_v, new_v});
+                        push_tracker_field_edit(edits, m_cursor_track, m_cursor_row, abs_f, new_v);
                         m_engine.undo_stack().execute(std::make_unique<CmdEditBlock>(*m_pattern, edits));
                         Refresh();
                     }
@@ -757,15 +814,15 @@ void TrackerView::delete_current_field() {
     const int actual_track = actual_track_index(m_cursor_track);
     if (actual_track < 0) return;
     int abs_f = cursor_abs_field();
-    uint8_t old_v = m_pattern->get_field((size_t)actual_track, (size_t)m_cursor_row, (size_t)abs_f);
-    uint8_t new_v = 0;
-    if (m_cursor_field == 0) new_v = 255;
-    else if (m_cursor_field == 1) new_v = 255;
-    new_v = sanitize_field_value(m_cursor_track, abs_f, new_v);
+    std::vector<CmdEditBlock::CellEdit> edits;
+    if (m_cursor_field == 0) {
+        clear_note_and_volume(edits, m_cursor_track, m_cursor_row, abs_f);
+    } else if (m_cursor_field == 1) {
+        push_tracker_field_edit(edits, m_cursor_track, m_cursor_row, abs_f,
+                                sanitize_field_value(m_cursor_track, abs_f, 255));
+    }
 
-    if (old_v != new_v) {
-        std::vector<CmdEditBlock::CellEdit> edits;
-        edits.push_back({(size_t)actual_track, (size_t)m_cursor_row, (size_t)abs_f, old_v, new_v});
+    if (!edits.empty()) {
         m_engine.undo_stack().execute(std::make_unique<CmdEditBlock>(*m_pattern, edits));
         Refresh();
     }
@@ -822,10 +879,10 @@ void TrackerView::insert_note(uint8_t note) {
 
     if (m_engine.m_record_enabled.load()) {
         int abs_f = m_cursor_col * kFieldsPerNoteColumn + 0;
-        uint8_t old_note = m_pattern->get_field((size_t)actual_track, (size_t)target_row, (size_t)abs_f);
+        uint8_t old_note = tracker_field_value(m_cursor_track, target_row, abs_f);
         if (old_note != final_note) {
             std::vector<CmdEditBlock::CellEdit> edits;
-            edits.push_back({(size_t)actual_track, (size_t)target_row, (size_t)abs_f, old_note, final_note});
+            push_tracker_field_edit(edits, m_cursor_track, target_row, abs_f, final_note);
             m_engine.undo_stack().execute(std::make_unique<CmdEditBlock>(*m_pattern, edits));
         }
 
@@ -862,7 +919,7 @@ bool TrackerView::handle_action(Action action) {
                     for (int f = 0; f < total_f; ++f) {
                         auto cur_pos = std::make_pair(t, f);
                         if (cur_pos >= start && cur_pos <= end) {
-                            uint8_t val = m_pattern->get_field((size_t)actual_track, (size_t)r, (size_t)f);
+                            uint8_t val = tracker_field_value(t, r, f);
                             clip.cells.push_back({t - start.first, r - min_r, f, val});
                         }
                     }
@@ -889,9 +946,8 @@ bool TrackerView::handle_action(Action action) {
                     int total_f = track_total_fields(target_t);
                     if (target_f < total_f) {
                         uint8_t new_v = sanitize_field_value(target_t, target_f, cell.value);
-                        uint8_t old_v = m_pattern->get_field((size_t)actual_track, (size_t)target_r, (size_t)target_f);
-                        if (old_v != new_v)
-                            edits.push_back({(size_t)actual_track, (size_t)target_r, (size_t)target_f, old_v, new_v});
+                        if (tracker_field_value(target_t, target_r, target_f) != new_v)
+                            push_tracker_field_edit(edits, target_t, target_r, target_f, new_v);
                     }
                 }
             }
@@ -1030,20 +1086,21 @@ bool TrackerView::handle_action(Action action) {
                 for (int t = start.first; t <= end.first; ++t) {
                     const int actual_track = actual_track_index(t);
                     if (actual_track < 0) continue;
-                    int num_cols = tracker_column_count(*m_pattern, actual_track);
-                    int total_f = num_cols * kFieldsPerNoteColumn;
+                    int total_f = track_total_fields(t);
                     for (int r = min_r; r <= max_r; ++r) {
                         for (int f = 0; f < total_f; ++f) {
                             auto cur_pos = std::make_pair(t, f);
                             if (cur_pos >= start && cur_pos <= end) {
-                                uint8_t old_v = m_pattern->get_field((size_t)actual_track, (size_t)r, (size_t)f);
-                                uint8_t new_v = 0;
-                                if (f < num_cols * kFieldsPerNoteColumn) {
-                                    if (f % kFieldsPerNoteColumn == 0) new_v = 255; // Note
-                                    else if (f % kFieldsPerNoteColumn == 1) new_v = 255; // Vol
+                                if (is_tempo_cell(t)) {
+                                    push_tracker_field_edit(edits, t, r, f, 0);
+                                    continue;
                                 }
-                                if (old_v != new_v)
-                                    edits.push_back({(size_t)actual_track, (size_t)r, (size_t)f, old_v, new_v});
+                                if (f % kFieldsPerNoteColumn == 0) {
+                                    clear_note_and_volume(edits, t, r, f);
+                                } else if (f % kFieldsPerNoteColumn == 1) {
+                                    push_tracker_field_edit(edits, t, r, f,
+                                                            sanitize_field_value(t, f, 255));
+                                }
                             }
                         }
                     }
