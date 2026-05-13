@@ -56,10 +56,10 @@ namespace tpanar_ns
 
     size_t Timing::samples_per_beat() const
     {
-        // Calculate directly. 
-        // Note: In Tpanar, LPB is 'rows per beat marker', and row duration is fixed by 'speed'.
-        double beat_sec = (2.5 * double(m_speed) * double(m_lpb)) / double(m_bpm);
-        return static_cast<size_t>(std::lround(m_sample_rate * beat_sec));
+        // Derive from samples_per_row() so the beat boundary always lands exactly
+        // on a row boundary.  An independent lround() could differ by 1 sample,
+        // causing the metronome click to drift relative to note rows over time.
+        return samples_per_row() * static_cast<size_t>(m_lpb);
     }
 
     size_t Timing::samples_per_bar() const
