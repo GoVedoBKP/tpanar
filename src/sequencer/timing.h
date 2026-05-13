@@ -29,6 +29,11 @@ public:
     size_t samples_per_tick() const;
     size_t samples_per_row() const;
 
+    // Returns the sample duration for tick_index_in_row (0..speed-1) such that
+    // the sum over all ticks in a row equals samples_per_row() exactly.
+    // This avoids the rounding drift from accumulating samples_per_tick().
+    size_t samples_for_tick(size_t tick_index_in_row) const;
+
     size_t samples_per_beat() const;
     size_t samples_per_bar() const;
 

@@ -1336,10 +1336,11 @@ void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float*
         size_t block = nframes - processed;
         if (transport().is_playing()) {
             if (m_samples_until_next_tick == 0) {
+                size_t tick_just_fired = m_current_tick;
                 if (!m_record_preroll_active.load(std::memory_order_acquire)) {
                     process_tick();
                 }
-                m_samples_until_next_tick = m_timing.samples_per_tick();
+                m_samples_until_next_tick = m_timing.samples_for_tick(tick_just_fired);
             }
             block = std::min(block, m_samples_until_next_tick);
         }
@@ -1411,8 +1412,9 @@ void Engine::process_block(float* l, float* r, size_t nframes, const float* cons
     size_t processed = 0;
     while (processed < nframes) {
         if (m_samples_until_next_tick == 0) {
+            size_t tick_just_fired = m_current_tick;
             process_tick();
-            m_samples_until_next_tick = m_timing.samples_per_tick();
+            m_samples_until_next_tick = m_timing.samples_for_tick(tick_just_fired);
         }
         size_t block = std::min(m_samples_until_next_tick, nframes - processed);
         block = std::min(block, MAX_BLOCK);

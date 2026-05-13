@@ -44,6 +44,16 @@ namespace tpanar_ns
         return static_cast<size_t>(std::lround(m_sample_rate * row_sec));
     }
 
+    size_t Timing::samples_for_tick(size_t tick_index_in_row) const
+    {
+        // Distribute samples_per_row() across speed ticks so the row boundary is
+        // sample-accurate.  The first (spr % speed) ticks get one extra sample.
+        size_t spr = samples_per_row();
+        size_t q   = spr / static_cast<size_t>(m_speed);
+        size_t r   = spr % static_cast<size_t>(m_speed);
+        return q + (tick_index_in_row < r ? 1u : 0u);
+    }
+
     size_t Timing::samples_per_beat() const
     {
         // Calculate directly. 
