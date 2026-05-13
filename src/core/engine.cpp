@@ -1318,6 +1318,19 @@ void Engine::handle_effect_row_start(size_t t, const TrackEvent& ev)
 
 void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float** out_bufs, uint32_t num_outs, size_t nframes)
 {
+    // During offline export the render loop runs in a separate thread and owns
+    // all engine state (m_current_tick, m_current_row, voice positions, …).
+    // Continuing to call process_tick() / render_block_multi() here from the
+    // JACK callback would race on that state, causing rows to advance at ~2×
+    // speed (pattern ends prematurely) and sample voices to advance at ~2×
+    // speed (audio track drifts).  Simply silence the hardware outputs and
+    // return immediately while the export thread does all the work.
+    if (m_is_exporting.load(std::memory_order_acquire)) {
+        for (uint32_t j = 0; j < num_outs; ++j)
+            if (out_bufs[j]) std::fill(out_bufs[j], out_bufs[j] + nframes, 0.f);
+        return;
+    }
+
     MidiMessage msg;
     while (m_midi_queue.pop(msg)) {
         uint8_t status = msg.status & 0xF0;
@@ -1368,20 +1381,12 @@ void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float*
         m_master.process(out_bufs[0], out_bufs[1], nframes);
     }
 
-    if (m_is_exporting.load()) {
-        for (uint32_t j = 0; j < num_outs; ++j) {
-            if (out_bufs[j]) {
-                for (size_t i = 0; i < nframes; ++i) { out_bufs[j][i] = 0.f; }
-            }
-        }
-    }
-
     if (num_outs >= 2 && out_bufs[0] && out_bufs[1]) {
         for (size_t i = 0; i < nframes; ++i) m_spectral_rb.push((out_bufs[0][i] + out_bufs[1][i]) * 0.5f);
     }
 
     if ((m_metronome_enabled || m_record_preroll_active.load(std::memory_order_acquire)) &&
-        transport().state() != TransportState::Stopped && !m_is_exporting.load()) {
+        transport().state() != TransportState::Stopped) {
         if (num_outs >= 2 && out_bufs[0] && out_bufs[1]) {
             float met_l[MAX_BLOCK], met_r[MAX_BLOCK];
             size_t generated = 0;
