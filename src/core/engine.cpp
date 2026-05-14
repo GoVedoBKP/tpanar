@@ -32,6 +32,7 @@
 #include "../instrument/sfz_instrument.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <fstream>
 #include <thread>
@@ -1344,6 +1345,24 @@ void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float*
 
     process_commands();
 
+    // DEBUG: track total samples processed and log beat/row-0 firing positions
+    static size_t s_dbg_total = 0;
+    static int s_dbg_beats_logged = 0;
+    static int s_dbg_rows_logged = 0;
+    static bool s_dbg_active = false;
+    if (transport().is_playing() && !s_dbg_active) {
+        // new play session — reset counters and dump timing params
+        s_dbg_total = 0; s_dbg_beats_logged = 0; s_dbg_rows_logged = 0;
+        s_dbg_active = true;
+        //fprintf(stderr, "DBG PARAMS bpm=%d speed=%d lpb=%u sr=%u spr=%zu spb=%zu nframes=%zu\n",
+        //        m_timing.bpm(), m_timing.speed(), m_timing.lpb(), m_sample_rate,
+        //        m_timing.samples_per_row(), m_timing.samples_per_beat(), nframes);
+        //fprintf(stderr, "DBG INIT   tick=%zu beat=%zu met_enabled=%d\n",
+        //        m_samples_until_next_tick, m_samples_until_next_beat, (int)m_metronome_enabled);
+    } else if (!transport().is_playing()) {
+        s_dbg_active = false;
+    }
+
     size_t processed = 0;
     while (processed < nframes) {
         size_t block = nframes - processed;
@@ -1354,6 +1373,13 @@ void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float*
                     process_tick();
                 }
                 m_samples_until_next_tick = m_timing.samples_for_tick(tick_just_fired);
+                // DEBUG: log row-0 fires (row boundaries for note scheduling)
+                if (tick_just_fired == 0 && s_dbg_rows_logged < 70) {
+                    //fprintf(stderr, "DBG ROW  row=%zu abs_sample=%zu\n",
+                    //        m_current_row,
+                    //        s_dbg_total + processed);
+                    s_dbg_rows_logged++;
+                }
             }
             block = std::min(block, m_samples_until_next_tick);
         }
@@ -1385,26 +1411,40 @@ void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float*
         for (size_t i = 0; i < nframes; ++i) m_spectral_rb.push((out_bufs[0][i] + out_bufs[1][i]) * 0.5f);
     }
 
-    if ((m_metronome_enabled || m_record_preroll_active.load(std::memory_order_acquire)) &&
-        transport().state() != TransportState::Stopped) {
-        if (num_outs >= 2 && out_bufs[0] && out_bufs[1]) {
-            float met_l[MAX_BLOCK], met_r[MAX_BLOCK];
-            size_t generated = 0;
-            while (generated < nframes) {
-                const size_t block = std::min(MAX_BLOCK, nframes - generated);
-                for (size_t i = 0; i < block; ++i) {
-                    met_l[i] = 0.f;
-                    met_r[i] = 0.f;
-                }
-                m_metronome.process(met_l, met_r, block, m_samples_until_next_beat, m_timing.samples_per_beat());
+    // Process metronome: always advance m_samples_until_next_beat so the phase
+    // stays correct even when audio output is suppressed (e.g., metronome disabled).
+    // Audio is only mixed in when the metronome or preroll is active.
+    if (transport().state() != TransportState::Stopped) {
+        const bool output_click = (m_metronome_enabled ||
+                                   m_record_preroll_active.load(std::memory_order_acquire)) &&
+                                  num_outs >= 2 && out_bufs[0] && out_bufs[1];
+        const size_t spb = m_timing.samples_per_beat();
+        float met_l[MAX_BLOCK], met_r[MAX_BLOCK];
+        size_t generated = 0;
+        while (generated < nframes) {
+            const size_t block = std::min(MAX_BLOCK, nframes - generated);
+            // DEBUG: log beat fires unconditionally
+            if (s_dbg_beats_logged < 20 && m_samples_until_next_beat < block) {
+                //fprintf(stderr, "DBG BEAT abs_sample=%zu\n",
+                //        s_dbg_total + generated + m_samples_until_next_beat);
+                s_dbg_beats_logged++;
+            }
+            for (size_t i = 0; i < block; ++i) {
+                met_l[i] = 0.f;
+                met_r[i] = 0.f;
+            }
+            m_metronome.process(met_l, met_r, block, m_samples_until_next_beat, spb);
+            if (output_click) {
                 for (size_t i = 0; i < block; ++i) {
                     out_bufs[0][generated + i] += met_l[i];
                     out_bufs[1][generated + i] += met_r[i];
                 }
-                generated += block;
             }
+            generated += block;
         }
     }
+    // DEBUG: advance total sample count
+    s_dbg_total += nframes;
 }
 
 void Engine::process_audio(const float* const* in_bufs, uint32_t num_ins, float* out_l, float* out_r, size_t nframes)
@@ -1714,7 +1754,9 @@ void Engine::set_instrument_type(size_t index, InstrumentType type) {
 }
 
 void Engine::add_track() { 
-    m_tracks.emplace_back(); 
+    m_tracks.emplace_back();
+    m_tracks.back().set_engine_rate((double)m_sample_rate);
+    m_tracks.back().chain().set_sample_rate((float)m_sample_rate);
     for (auto& pat : m_patterns) {
         pat->resize_tracks(m_tracks.size());
     }

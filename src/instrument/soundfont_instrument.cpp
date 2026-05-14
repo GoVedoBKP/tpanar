@@ -10,7 +10,7 @@ namespace tpanar_ns
 {
 
     namespace {
-        constexpr int kFluidSynthPolyphony = 512;
+        constexpr int kFluidSynthPolyphony = 4096;
     }
 
     SoundFontInstrument::SoundFontInstrument(double sample_rate)
@@ -18,6 +18,9 @@ namespace tpanar_ns
         m_fluid_settings = new_fluid_settings();
         fluid_settings_setnum(m_fluid_settings, "synth.sample-rate", sample_rate);
         fluid_settings_setint(m_fluid_settings, "synth.polyphony", kFluidSynthPolyphony);
+        // note_on and process are both called from the audio thread — no cross-thread
+        // ringbuffer needed. Disabling avoids "Ringbuffer full" warnings under load.
+        fluid_settings_setint(m_fluid_settings, "synth.threadsafe-api", 0);
         // Set gain to 1.0 (unity) and don't change it later, 
         // because the Track mixer already applies volume.
         fluid_settings_setnum(m_fluid_settings, "synth.gain", 1.0);
