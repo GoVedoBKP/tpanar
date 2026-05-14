@@ -20,6 +20,7 @@
 #include <wx/artprov.h>
 #include <wx/dcclient.h>
 #include <wx/dcbuffer.h>
+#include <wx/dcmemory.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include "wx_tracks_panel.h"
@@ -44,6 +45,7 @@ namespace {
 
 constexpr int kTrackHeaderWidth = 320;
 constexpr int kMinimizeButtonX = 5;
+constexpr int kMaxWaveCacheWidth = 16384; // bitmaps wider than this are not cached
 constexpr int kMinimizeButtonW = 20;
 constexpr int kControlButtonW = 28;
 constexpr int kControlButtonH = 20;
@@ -743,6 +745,19 @@ static void draw_waveform_helper(wxDC& dc, int x, int y, int w, int h, const Sam
     }
 }
 
+static wxBitmap make_wave_bitmap(int w, int h, const SampleData& data,
+                                  size_t max_samples,
+                                  const wxColour& bg, const wxColour& wave_col)
+{
+    wxBitmap bmp(std::max(1, w), std::max(1, h));
+    wxMemoryDC mdc(bmp);
+    mdc.SetBrush(wxBrush(bg));
+    mdc.SetPen(wxPen(bg));
+    mdc.DrawRectangle(0, 0, w, h);
+    draw_waveform_helper(mdc, 0, 0, w, h, data, wave_col, max_samples);
+    return bmp;
+}
+
 enum {
     ID_ZOOM_IN = 10001,
     ID_ZOOM_OUT,
@@ -1042,6 +1057,12 @@ void TracksView::OnPaint(wxPaintEvent& event) {
 }
 
 void TracksView::draw(wxDC& dc) {
+    // Invalidate waveform bitmap cache when zoom changes or it grows too large.
+    if (m_cache_zoom != m_zoom || m_wave_cache.size() > 200) {
+        m_wave_cache.clear();
+        m_cache_zoom = m_zoom;
+    }
+
     // Compute the visible logical area once for culling throughout this draw pass
     int vsx, vsy;
     GetViewStart(&vsx, &vsy);
@@ -1244,16 +1265,33 @@ void TracksView::draw(wxDC& dc) {
         // Track Header
         wxColour header_bg = ThemeManager::toWxColour(m_engine.m_bg_color);
         const wxColour sel_col = ThemeManager::toWxColour(m_engine.m_selection_color);
-        if (is_track_selected(t)) {
+        const bool track_is_selected = is_track_selected(t);
+        const bool track_is_primary  = (m_selected_track == t);
+        if (track_is_primary) {
+            header_bg = wxColour(sel_col.Red(), sel_col.Green(), sel_col.Blue(), 90);
+        } else if (track_is_selected) {
             header_bg = wxColour(sel_col.Red(), sel_col.Green(), sel_col.Blue(), 56);
         }
         dc.SetBrush(wxBrush(header_bg));
         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_fg_color)));
         dc.DrawRectangle(0, ty, header_w, track_h_actual - 1);
-        if (is_track_selected(t)) {
+        // 4-px left stripe across the full track row for every selected track.
+        if (track_is_selected) {
+            dc.SetBrush(wxBrush(sel_col));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(0, ty, 4, track_h_actual);
+        }
+        // Inset border for the primary (active) track — makes it unambiguous.
+        if (track_is_primary) {
             dc.SetPen(wxPen(sel_col, 2));
             dc.SetBrush(*wxTRANSPARENT_BRUSH);
-            dc.DrawRectangle(0, ty, header_w, track_h_actual - 1);
+            dc.DrawRectangle(1, ty, header_w - 1, track_h_actual - 1);
+        }
+        // 2-px stripe at the header/content boundary continues the selection stripe.
+        if (track_is_selected) {
+            dc.SetBrush(wxBrush(sel_col));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(header_w, ty, 2, track_h_actual - 1);
         }
 
         // Minimize button (- for expanded, + for minimized)
@@ -1401,22 +1439,37 @@ void TracksView::draw(wxDC& dc) {
                         const int sample_rows = sample_rows_for_display(m_engine, *sample.data);
                         const int full_nw = std::max(2, tick_to_x(sample_rows));
                         const double sample_spp = (double)sample_frame_count(*sample.data) / (double)full_nw;
-                        // Viewport clip: only draw the visible horizontal slice
                         const int skip_px = std::max(0, view_x - header_w);
                         const int vis_x   = header_w + skip_px;
                         const int vis_w   = std::min(full_nw - skip_px, view_right - vis_x);
-                        // Background rectangle (full width for correct appearance)
-                        dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                        dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                        dc.DrawRectangle(header_w, ty + 5, full_nw, track_h_actual - 10);
-                        if (vis_w > 0 && sample_spp > 0.0) {
-                            // Compute which samples correspond to the visible slice
-                            const size_t s_start = (size_t)(skip_px * sample_spp);
-                            const size_t s_end   = s_start + (size_t)(vis_w * sample_spp) + 2;
-                            draw_waveform_helper(dc, vis_x, ty + 5, vis_w, track_h_actual - 10,
-                                                 *sample.data,
-                                                 ThemeManager::toWxColour(m_engine.m_tracker_note),
-                                                 s_end, s_start);
+                        const int wave_h  = track_h_actual - 10;
+                        const wxColour wave_bg  = ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight);
+                        const wxColour wave_col = ThemeManager::toWxColour(m_engine.m_tracker_note);
+                        if (full_nw > 0 && full_nw <= kMaxWaveCacheWidth) {
+                            const auto key = std::make_tuple(
+                                reinterpret_cast<uintptr_t>(sample.data.get()), full_nw, wave_h, size_t(0));
+                            auto it = m_wave_cache.find(key);
+                            if (it == m_wave_cache.end()) {
+                                it = m_wave_cache.emplace(
+                                    key, make_wave_bitmap(full_nw, wave_h, *sample.data, 0, wave_bg, wave_col))
+                                    .first;
+                            }
+                            if (vis_w > 0) {
+                                wxMemoryDC mdc;
+                                mdc.SelectObjectAsSource(it->second);
+                                dc.Blit(vis_x, ty + 5, vis_w, wave_h, &mdc, skip_px, 0);
+                            }
+                        } else {
+                            // Fallback for very wide waveforms (not cached).
+                            dc.SetBrush(wxBrush(wave_bg));
+                            dc.SetPen(wxPen(wave_bg));
+                            dc.DrawRectangle(header_w, ty + 5, full_nw, wave_h);
+                            if (vis_w > 0 && sample_spp > 0.0) {
+                                const size_t s_start = (size_t)(skip_px * sample_spp);
+                                const size_t s_end   = s_start + (size_t)(vis_w * sample_spp) + 2;
+                                draw_waveform_helper(dc, vis_x, ty + 5, vis_w, wave_h,
+                                                     *sample.data, wave_col, s_end, s_start);
+                            }
                         }
                     }
                 }
@@ -1524,23 +1577,35 @@ void TracksView::draw(wxDC& dc) {
                                             // Use pre-computed overlaps
                                             bool is_overlapping = (s_idx < cached_overlaps.size()) && cached_overlaps[s_idx].is_overlapping;
 
-                                            // Draw sample background
+                                            const int w_h = track_h_actual - 10;
+                                            const wxColour w_bg  = ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight);
+                                            const wxColour w_col = ThemeManager::toWxColour(m_engine.m_tracker_note);
+
                                             if (is_overlapping) {
+                                                // Overlapping notes get an orange background; skip the cache for these.
                                                 dc.SetBrush(wxBrush(wxColour(255, 200, 0, 128)));
                                                 dc.SetPen(wxPen(wxColour(255, 150, 0)));
-                                            } else {
-                                                dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                                                dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
-                                            }
-                                            dc.DrawRectangle(nx, ty + 5, nw, track_h_actual - 10);
-
-                                            // Draw waveform
-                                            draw_waveform_helper(dc, nx, ty + 5, nw, track_h_actual - 10, *sample.data, ThemeManager::toWxColour(m_engine.m_tracker_note), samples_to_draw);
-
-                                            // Draw overlap indicator if needed
-                                            if (is_overlapping) {
+                                                dc.DrawRectangle(nx, ty + 5, nw, w_h);
+                                                draw_waveform_helper(dc, nx, ty + 5, nw, w_h, *sample.data, w_col, samples_to_draw);
                                                 dc.SetPen(wxPen(wxColour(255, 100, 0), 2));
-                                                dc.DrawRectangle(nx, ty + 5, nw, track_h_actual - 10);
+                                                dc.DrawRectangle(nx, ty + 5, nw, w_h);
+                                            } else if (nw <= kMaxWaveCacheWidth) {
+                                                const auto wkey = std::make_tuple(
+                                                    reinterpret_cast<uintptr_t>(sample.data.get()), nw, w_h, samples_to_draw);
+                                                auto wit = m_wave_cache.find(wkey);
+                                                if (wit == m_wave_cache.end()) {
+                                                    wit = m_wave_cache.emplace(
+                                                        wkey, make_wave_bitmap(nw, w_h, *sample.data, samples_to_draw, w_bg, w_col))
+                                                        .first;
+                                                }
+                                                wxMemoryDC wmdc;
+                                                wmdc.SelectObjectAsSource(wit->second);
+                                                dc.Blit(nx, ty + 5, nw, w_h, &wmdc, 0, 0);
+                                            } else {
+                                                dc.SetBrush(wxBrush(w_bg));
+                                                dc.SetPen(wxPen(w_bg));
+                                                dc.DrawRectangle(nx, ty + 5, nw, w_h);
+                                                draw_waveform_helper(dc, nx, ty + 5, nw, w_h, *sample.data, w_col, samples_to_draw);
                                             }
                                         }
                                     }

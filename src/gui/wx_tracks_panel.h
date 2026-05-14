@@ -23,7 +23,11 @@
 #include <wx/button.h>
 #include <wx/sizer.h>
 #include <wx/dc.h>
+#include <wx/bitmap.h>
+#include <map>
 #include <set>
+#include <tuple>
+#include <cstdint>
 
 namespace tpanar_ns {
 
@@ -140,6 +144,10 @@ private:
     int m_marker_in = -1;
     int m_marker_out = -1;
     int m_last_right_click_x = 0; // unscrolled X at last right-click, for "Set marker here"
+
+    // Waveform bitmap cache: key = (data_ptr, width, height, max_samples)
+    std::map<std::tuple<uintptr_t, int, int, size_t>, wxBitmap> m_wave_cache;
+    double m_cache_zoom = 0.0;
 
     wxDECLARE_EVENT_TABLE();
 };
