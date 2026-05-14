@@ -588,13 +588,19 @@ void TrackerView::OnKeyDown(wxKeyEvent& event) {
             navigated = true;
             break;
         case WXK_DELETE:
-        case WXK_BACK:
             if (m_engine.m_record_enabled.load()) {
+                // Renoise: Delete clears current cell, cursor advances down by edit step
                 delete_current_field();
-                if (key == WXK_BACK) {
-                    m_cursor_row--;
-                    if (m_cursor_row < 0) m_cursor_row = (int)m_pattern->row_count() - 1;
-                }
+                m_cursor_row = std::min((int)m_pattern->row_count() - 1,
+                                        m_cursor_row + (int)m_engine.step_size());
+            }
+            break;
+        case WXK_BACK:
+            if (m_engine.m_record_enabled.load() && m_pattern) {
+                // Renoise: Backspace deletes current row, shifts all rows below up,
+                // appends empty row at bottom; cursor stays at same position
+                m_pattern->delete_row(m_cursor_row);
+                Refresh();
             }
             break;
         default: {
