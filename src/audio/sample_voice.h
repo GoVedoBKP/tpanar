@@ -48,6 +48,10 @@ namespace tpanar_ns
                                 float* out_r,
                                 size_t frames) override;
 
+                   // Advance position and envelope state without producing audio output.
+                   // Call this on muted tracks to keep the playback position in sync.
+                   void advance(size_t frames);
+
                                 bool active() const override;
                    double position() const { return m_position; }
 

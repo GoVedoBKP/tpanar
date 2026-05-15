@@ -1589,6 +1589,10 @@ void Engine::render_block_multi(float** out_bufs, uint32_t num_outs, size_t fram
         if (audible) {
             m_tracks[t].process(m_track_l[t], m_track_r[t], frames, in_bufs);
         } else {
+            // Still advance the audio voice so its position stays in sync
+            // with the song timeline. Without this, unmuting would resume
+            // from the position at which the track was muted.
+            m_tracks[t].advance_audio_voice(frames);
             std::fill(m_track_l[t], m_track_l[t] + frames, 0.f);
             std::fill(m_track_r[t], m_track_r[t] + frames, 0.f);
         }

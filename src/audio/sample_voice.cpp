@@ -148,6 +148,32 @@ namespace tpanar_ns
             m_active = false;
     }
 
+    void SampleVoice::advance(size_t frames)
+    {
+        if (!m_env.active() || !m_sample || m_sample->left.size() < 2) {
+            m_active = false;
+            return;
+        }
 
+        const size_t sample_size = m_sample->left.size();
+        const size_t effective_end =
+            (m_end_pos > 0 && m_end_pos < sample_size) ? m_end_pos : (sample_size - 1);
+
+        for (size_t i = 0; i < frames; ++i) {
+            if (m_position >= (double)effective_end) {
+                if (m_loop_enabled) {
+                    m_position = (double)m_loop_start;
+                } else {
+                    m_active = false;
+                    return;
+                }
+            }
+            m_env.process(); // keep envelope state in sync
+            m_position += m_increment;
+        }
+
+        if (!m_env.active())
+            m_active = false;
+    }
 
 } // namespace tpanar_ns

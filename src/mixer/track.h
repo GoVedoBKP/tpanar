@@ -138,6 +138,9 @@ public:
     void set_mute(bool m);
     bool muted() const;
 
+    // Advance the audio voice position without producing audio (call when muted).
+    void advance_audio_voice(size_t frames);
+
     float meter_level_l() const;
     float meter_level_r() const;
     bool solo() const;

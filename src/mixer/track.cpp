@@ -350,6 +350,12 @@ bool tpanar_ns::Track::muted() const
     return m_mute;
 }
 
+void tpanar_ns::Track::advance_audio_voice(size_t frames)
+{
+    if (m_audio_voice && m_audio_voice->active() && !is_audio_capture_active())
+        m_audio_voice->advance(frames);
+}
+
 
 void tpanar_ns::Track::process_tick(uint32_t engine_current_tick) // Added namespace and class prefix, updated parameter
 {
