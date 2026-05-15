@@ -886,10 +886,19 @@ void TracksPanel::update() {
     }
 
     if (current_pos != last_order_pos || current_row != last_row || current_transport != last_transport) {
+        const bool transport_changed = (current_transport != last_transport);
         last_order_pos = current_pos;
         last_row = current_row;
         last_transport = current_transport;
-        m_tracks_view->Refresh(false);
+        if (!transport_changed && m_engine.transport_state() != TransportState::Stopped) {
+            // Steady-state playback: only repaint the narrow playhead strip.
+            m_tracks_view->ensure_playhead_visible();
+            m_tracks_view->refresh_playhead_strip();
+        } else {
+            // Transport state changed or stopped: full repaint for correctness.
+            m_tracks_view->reset_playhead_tracking();
+            m_tracks_view->Refresh(false);
+        }
     }
 }
 
@@ -1509,6 +1518,9 @@ void TracksView::draw(wxDC& dc) {
                 SampleInstrument* sampler = static_cast<SampleInstrument*>(content_inst);
                 cached_overlaps = detect_overlaps(sampler);
             }
+            // Hoist the memory DC used for waveform-bitmap blits out of the inner
+            // note loop so we pay the construction/destruction cost only once per track.
+            wxMemoryDC note_wave_mdc;
             int rows_done = 0;
             for (auto pat_idx : order) {
                 auto& pat = m_engine.pattern(pat_idx);
@@ -1598,9 +1610,9 @@ void TracksView::draw(wxDC& dc) {
                                                         wkey, make_wave_bitmap(nw, w_h, *sample.data, samples_to_draw, w_bg, w_col))
                                                         .first;
                                                 }
-                                                wxMemoryDC wmdc;
-                                                wmdc.SelectObjectAsSource(wit->second);
-                                                dc.Blit(nx, ty + 5, nw, w_h, &wmdc, 0, 0);
+                                                note_wave_mdc.SelectObjectAsSource(wit->second);
+                                                dc.Blit(nx, ty + 5, nw, w_h, &note_wave_mdc, 0, 0);
+                                                note_wave_mdc.SelectObject(wxNullBitmap);
                                             } else {
                                                 dc.SetBrush(wxBrush(w_bg));
                                                 dc.SetPen(wxPen(w_bg));
@@ -1897,6 +1909,83 @@ void TracksView::update_view() {
     total_h += 50;
     SetVirtualSize(total_w, total_h);
     Refresh(false);
+}
+
+// Compute the current playhead logical-X (same formula as draw()).
+static int compute_play_tick(Engine& engine) {
+    auto order = engine.order_list();
+    size_t current_pos = engine.current_order_pos();
+    int play_tick = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+        const int pat_rows = (int)engine.pattern(order[i]).row_count();
+        if (i < current_pos) {
+            play_tick += pat_rows;
+        } else if (i == current_pos) {
+            play_tick += (int)engine.current_row();
+            break;
+        }
+    }
+    return play_tick;
+}
+
+void TracksView::ensure_playhead_visible() {
+    const int play_tick = compute_play_tick(m_engine);
+    const int logical_x = kTrackHeaderWidth + tick_to_x(play_tick);
+
+    int vsx, vsy;
+    GetViewStart(&vsx, &vsy);
+    int sux, suy;
+    GetScrollPixelsPerUnit(&sux, &suy);
+    if (sux <= 0) return;
+    const int scroll_px = vsx * sux;
+
+    wxSize csize = GetClientSize();
+    const int view_w = csize.GetWidth();
+    // Keep a comfortable margin so the playhead doesn't hug the right edge.
+    const int margin = std::max(50, view_w / 5);
+    const int content_left = kTrackHeaderWidth; // header is always visible
+
+    // Content area starts after the sticky header; the actual scrollable content
+    // starts at kTrackHeaderWidth logical pixels. The visible content window is
+    // [scroll_px + content_left .. scroll_px + view_w].
+    const int vis_left  = scroll_px + content_left;
+    const int vis_right = scroll_px + view_w - margin;
+
+    if (logical_x > vis_right || logical_x < vis_left) {
+        // Scroll so that the playhead sits margin pixels from the right edge.
+        int new_scroll_px = logical_x - (view_w - margin);
+        if (new_scroll_px < 0) new_scroll_px = 0;
+        Scroll(new_scroll_px / sux, vsy);
+    }
+}
+
+void TracksView::refresh_playhead_strip() {
+    const int play_tick = compute_play_tick(m_engine);
+    const int new_logical_x = kTrackHeaderWidth + tick_to_x(play_tick);
+
+    int vsx, vsy;
+    GetViewStart(&vsx, &vsy);
+    int sux, suy;
+    GetScrollPixelsPerUnit(&sux, &suy);
+    const int scroll_px = vsx * sux;
+
+    // A strip 6 px wide is wide enough to cover the 2-px line + 1 px rounding slop
+    // on each side. We convert from logical coords to client (screen) coords.
+    const int strip_w = 8;
+
+    auto refresh_strip = [&](int logical_x) {
+        int screen_x = logical_x - scroll_px - strip_w / 2;
+        wxSize csize = GetClientSize();
+        if (screen_x + strip_w < 0 || screen_x >= csize.GetWidth()) return;
+        screen_x = std::max(0, screen_x);
+        RefreshRect(wxRect(screen_x, 0, strip_w, csize.GetHeight()), false);
+    };
+
+    if (m_last_playhead_logical_x >= 0 && m_last_playhead_logical_x != new_logical_x) {
+        refresh_strip(m_last_playhead_logical_x); // erase old position
+    }
+    refresh_strip(new_logical_x);
+    m_last_playhead_logical_x = new_logical_x;
 }
 
 void TracksView::OnMouseRightClick(wxMouseEvent& event) {

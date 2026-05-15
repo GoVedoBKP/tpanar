@@ -114,6 +114,14 @@ public:
     void clear_punch_markers();
     int cursor_row() const { return m_sel_start_tick >= 0 ? m_sel_start_tick : 0; }
 
+    // Called from TracksPanel::update() each timer tick during playback.
+    // Scrolls horizontally to keep the playhead in view and repaints only the
+    // necessary strip (old + new playhead positions) instead of the full canvas.
+    void ensure_playhead_visible();
+    void refresh_playhead_strip();
+    // Reset playhead tracking so the next refresh_playhead_strip() starts fresh.
+    void reset_playhead_tracking() { m_last_playhead_logical_x = -1; }
+
 private:
     int tick_to_x(int tick);
     int x_to_tick(int x);
@@ -148,6 +156,8 @@ private:
     // Waveform bitmap cache: key = (data_ptr, width, height, max_samples)
     std::map<std::tuple<uintptr_t, int, int, size_t>, wxBitmap> m_wave_cache;
     double m_cache_zoom = 0.0;
+    // Logical X of the playhead in the previous frame (for strip-only repaint).
+    int m_last_playhead_logical_x = -1;
 
     wxDECLARE_EVENT_TABLE();
 };
