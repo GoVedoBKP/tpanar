@@ -98,7 +98,9 @@ public:
     void OnKeyDown(wxKeyEvent& event);
     void OnSize(wxSizeEvent& event);
     void OnContextMenu(wxContextMenuEvent& event);
-    void draw(wxDC& dc);
+    void draw_static(wxDC& dc);
+    void draw_dynamic(wxDC& dc);
+    void invalidate_static();
     void do_cut();
     void do_copy();
     void do_paste();
@@ -158,6 +160,16 @@ private:
     double m_cache_zoom = 0.0;
     // Logical X of the playhead in the previous frame (for strip-only repaint).
     int m_last_playhead_logical_x = -1;
+
+    // Static background layer cache (everything except playhead + recording region).
+    wxBitmap m_static_bmp;
+    bool m_static_dirty = true;
+    int m_static_vsx = -1;
+    int m_static_vsy = -1;
+    wxSize m_static_client_size{0, 0};
+    // Playhead tick values cached by draw_static for use in draw_dynamic.
+    int m_display_tick = 0;
+    int m_play_tick = 0;
 
     wxDECLARE_EVENT_TABLE();
 };

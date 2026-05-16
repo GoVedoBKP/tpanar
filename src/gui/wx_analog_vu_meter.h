@@ -17,9 +17,13 @@ public:
     void OnPaint(wxPaintEvent& event);
 
 private:
+    void draw_static_bg(wxDC& dc);
+
     Engine& m_engine;
     float m_level = 0.0f;
     float m_smooth_level = 0.0f;
+    wxBitmap m_bg_cache;
+    long m_last_refresh_ms = 0;
 
     wxDECLARE_EVENT_TABLE();
 };

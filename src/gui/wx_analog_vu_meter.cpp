@@ -4,6 +4,7 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
+#include <wx/time.h>
 #include <cmath>
 #include <algorithm>
 
@@ -31,6 +32,12 @@ void AnalogVUMeter::level(float l) {
         m_smooth_level = 0.92f * m_smooth_level + 0.08f * m_level; // Slower fall
     }
     
+    long now = wxGetUTCTimeMillis().GetValue();
+    if (now - m_last_refresh_ms < 16) {
+        return;
+    }
+    m_last_refresh_ms = now;
+
     Refresh(false);
 }
 
@@ -40,10 +47,13 @@ void AnalogVUMeter::OnPaint(wxPaintEvent& event) {
     int w = size.GetWidth();
     int h = size.GetHeight();
 
-    // Background: White
-    dc.SetBrush(*wxWHITE_BRUSH);
-    dc.SetPen(*wxTRANSPARENT_PEN);
-    dc.DrawRectangle(0, 0, w, h);
+    if (!m_bg_cache.IsOk() || m_bg_cache.GetWidth() != w || m_bg_cache.GetHeight() != h) {
+        m_bg_cache = wxBitmap(w, h);
+        wxMemoryDC mdc(m_bg_cache);
+        draw_static_bg(mdc);
+    }
+
+    dc.DrawBitmap(m_bg_cache, 0, 0, false);
 
     // Scaling: Increased sensitivity (-40 to +3)
     float db = 20.0f * log10f(m_smooth_level + 0.00001f);
@@ -51,6 +61,39 @@ void AnalogVUMeter::OnPaint(wxPaintEvent& event) {
     float db_min = -40.0f; 
     float norm = (db - db_min) / (db_max - db_min);
     norm = std::max(0.0f, std::min(1.0f, norm));
+
+    int centerX = w / 2;
+    int centerY = h * 1.3;
+    int radius = centerY - 5;
+
+    // Needle
+    float angle = 135.0f - (norm * 90.0f);
+    const float pi = 3.1415926535f;
+    float rad = angle * pi / 180.0f;
+    int needleX = centerX + (int)((radius - 2) * cos(rad));
+    int needleY = centerY - (int)((radius - 2) * sin(rad));
+
+    dc.SetPen(wxPen(wxColour(230, 40, 0), 2)); // Slightly thinner needle
+    dc.DrawLine(centerX, centerY, needleX, needleY);
+
+    // Center pivot
+    dc.SetBrush(*wxBLACK_BRUSH);
+    dc.SetPen(*wxBLACK_PEN);
+    dc.DrawCircle(centerX, centerY, 5);
+}
+
+void AnalogVUMeter::draw_static_bg(wxDC& dc) {
+    wxSize size = GetClientSize();
+    int w = size.GetWidth();
+    int h = size.GetHeight();
+
+    // Background: White
+    dc.SetBrush(*wxWHITE_BRUSH);
+    dc.SetPen(*wxTRANSPARENT_PEN);
+    dc.DrawRectangle(0, 0, w, h);
+
+    float db_max = 3.0f;
+    float db_min = -40.0f; 
 
     // Meter arc and scale - adjusted for very compact height
     int centerX = w / 2;
@@ -113,20 +156,6 @@ void AnalogVUMeter::OnPaint(wxPaintEvent& event) {
         else dc.SetPen(wxPen(*wxBLACK, 1));
         dc.DrawLine(x1, y1, x2, y2);
     }
-
-    // Needle
-    float angle = 135.0f - (norm * 90.0f);
-    float rad = angle * pi / 180.0f;
-    int needleX = centerX + (int)((radius - 2) * cos(rad));
-    int needleY = centerY - (int)((radius - 2) * sin(rad));
-
-    dc.SetPen(wxPen(wxColour(230, 40, 0), 2)); // Slightly thinner needle
-    dc.DrawLine(centerX, centerY, needleX, needleY);
-
-    // Center pivot
-    dc.SetBrush(*wxBLACK_BRUSH);
-    dc.SetPen(*wxBLACK_PEN);
-    dc.DrawCircle(centerX, centerY, 5);
     
     // "VU" text - repositioned
     dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));

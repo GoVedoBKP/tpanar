@@ -22,6 +22,7 @@ private:
     float m_peak_hold = 0.0f;
     int m_peak_timer = 0;
     bool m_horizontal = false;
+    long m_last_refresh_ms = 0;
 
     DECLARE_EVENT_TABLE()
 };

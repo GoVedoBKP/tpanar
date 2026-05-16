@@ -710,9 +710,52 @@ static void draw_waveform_helper(wxDC& dc, int x, int y, int w, int h, const Sam
     const size_t data_len = data_end - sample_start;
     if (data_len == 0) return;
 
+    double samples_per_pixel = (double)data_len / w;
+    const size_t block_size = 128;
+    
+    // Use overview if we are zoomed out enough that many samples map to one pixel
+    if (samples_per_pixel > (double)block_size * 0.5) {
+        data.update_overview(block_size);
+        const auto& overview = *data.overview;
+        
+        auto draw_channel_ov = [&](const std::vector<WaveformOverview::MinMax>& ov_data, int ch_y) {
+            int mid_y = ch_y + ch_h / 2;
+            for (int i = 0; i < w; ++i) {
+                size_t start_s = sample_start + (size_t)(i * samples_per_pixel);
+                size_t end_s   = sample_start + (size_t)((i + 1) * samples_per_pixel);
+                if (end_s > data_end) end_s = data_end;
+                if (start_s >= end_s) continue;
+                
+                size_t start_b = start_s / block_size;
+                size_t end_b = (end_s + block_size - 1) / block_size;
+                if (start_b >= ov_data.size()) continue;
+                if (end_b > ov_data.size()) end_b = ov_data.size();
+                
+                float min_v = 1.0f, max_v = -1.0f;
+                for (size_t b = start_b; b < end_b; ++b) {
+                    min_v = std::min(min_v, ov_data[b].min);
+                    max_v = std::max(max_v, ov_data[b].max);
+                }
+                
+                int y1 = mid_y + (int)(min_v * (ch_h / 2 - 2));
+                int y2 = mid_y + (int)(max_v * (ch_h / 2 - 2));
+                dc.DrawLine(x + i, y1, x + i, y2);
+            }
+        };
+        
+        draw_channel_ov(overview.left, y);
+        if (is_stereo) {
+            draw_channel_ov(overview.right, y + ch_h);
+            // Draw a small divider line
+            dc.SetPen(wxPen(wxColour(col.Red(), col.Green(), col.Blue(), 80)));
+            dc.DrawLine(x, y + ch_h, x + w, y + ch_h);
+            dc.SetPen(wxPen(col));
+        }
+        return;
+    }
+
     auto draw_channel = [&](const std::vector<float>& ch_data, int ch_y) {
         int mid_y = ch_y + ch_h / 2;
-        double samples_per_pixel = (double)data_len / w;
         for (int i = 0; i < w; ++i) {
             size_t start = sample_start + (size_t)(i * samples_per_pixel);
             size_t end   = sample_start + (size_t)((i + 1) * samples_per_pixel);
@@ -896,6 +939,9 @@ void TracksPanel::update() {
             m_tracks_view->refresh_playhead_strip();
         } else {
             // Transport state changed or stopped: full repaint for correctness.
+            if (m_engine.transport_state() != TransportState::Stopped) {
+                m_tracks_view->ensure_playhead_visible();
+            }
             m_tracks_view->reset_playhead_tracking();
             m_tracks_view->Refresh(false);
         }
@@ -1021,6 +1067,7 @@ void TracksView::select_single_track(int track_idx)
         m_selected_track = -1;
         m_selection_anchor_track = -1;
     }
+    invalidate_static();
 }
 
 void TracksView::select_track_range(int track_idx)
@@ -1035,6 +1082,7 @@ void TracksView::select_track_range(int track_idx)
         m_selected_tracks.insert(t);
     }
     m_selected_track = track_idx;
+    invalidate_static();
 }
 
 void TracksView::toggle_track_selection(int track_idx)
@@ -1057,17 +1105,63 @@ void TracksView::toggle_track_selection(int track_idx)
         m_selected_track = track_idx;
         m_selection_anchor_track = track_idx;
     }
+    invalidate_static();
 }
+
+static int compute_play_tick(Engine& engine);
 
 void TracksView::OnPaint(wxPaintEvent& event) {
     wxAutoBufferedPaintDC dc(this);
     PrepareDC(dc);
-    draw(dc);
+
+    int vsx, vsy;
+    GetViewStart(&vsx, &vsy);
+    int sux, suy;
+    GetScrollPixelsPerUnit(&sux, &suy);
+    wxSize csize = GetClientSize();
+    const int view_x = vsx * sux;
+    const int view_y = vsy * suy;
+
+    const bool need_rebuild = m_static_dirty
+        || vsx != m_static_vsx
+        || vsy != m_static_vsy
+        || csize != m_static_client_size;
+
+    if (need_rebuild) {
+        const int w = std::max(1, csize.GetWidth());
+        const int h = std::max(1, csize.GetHeight());
+        if (!m_static_bmp.IsOk() || m_static_bmp.GetWidth() != w || m_static_bmp.GetHeight() != h) {
+            m_static_bmp = wxBitmap(w, h);
+        }
+        wxMemoryDC mdc(m_static_bmp);
+        mdc.SetDeviceOrigin(-view_x, -view_y);
+        draw_static(mdc);
+        m_static_vsx = vsx;
+        m_static_vsy = vsy;
+        m_static_client_size = csize;
+        m_static_dirty = false;
+    }
+
+    // Update playhead position every paint — draw_static only runs on rebuild
+    {
+        const bool playing = m_engine.transport_state() != TransportState::Stopped;
+        m_play_tick = compute_play_tick(m_engine);
+        m_display_tick = playing ? m_play_tick : cursor_row();
+    }
+
+    // Blit static layer onto the paint DC (clipped to the update region automatically)
+    {
+        wxMemoryDC sdc(m_static_bmp);
+        dc.Blit(view_x, view_y, csize.GetWidth(), csize.GetHeight(), &sdc, 0, 0);
+    }
+
+    // Draw dynamic overlay (playhead + recording region)
+    draw_dynamic(dc);
 }
 
-void TracksView::draw(wxDC& dc) {
+void TracksView::draw_static(wxDC& dc) {
     // Invalidate waveform bitmap cache when zoom changes or it grows too large.
-    if (m_cache_zoom != m_zoom || m_wave_cache.size() > 200) {
+    if (m_cache_zoom != m_zoom || m_wave_cache.size() > 1000) {
         m_wave_cache.clear();
         m_cache_zoom = m_zoom;
     }
@@ -1194,6 +1288,10 @@ void TracksView::draw(wxDC& dc) {
         }
     }
 
+    // Cache tick values for draw_dynamic (also updated in OnPaint on every frame)
+    m_display_tick = display_tick;
+    m_play_tick = play_tick;
+
     const int ruler_y = sticky_ruler_top + kPositionRulerHeight / 2;
     dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_text)));
     dc.DrawLine(header_w, ruler_y, header_w + tick_to_x(total_rows), ruler_y);
@@ -1221,18 +1319,6 @@ void TracksView::draw(wxDC& dc) {
         dc.DrawPolygon(3, loop_in);
         dc.DrawPolygon(3, loop_out);
     }
-
-    const int playhead_x = header_w + tick_to_x(display_tick);
-    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor), 2));
-    dc.DrawLine(playhead_x, sticky_timeline_top + 1, playhead_x, sticky_header_bottom - 2);
-    dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
-    dc.SetPen(*wxTRANSPARENT_PEN);
-    wxPoint playhead_marker[] = {
-        wxPoint(playhead_x - 6, ruler_y + 1),
-        wxPoint(playhead_x + 6, ruler_y + 1),
-        wxPoint(playhead_x, sticky_header_bottom - 2)
-    };
-    dc.DrawPolygon(3, playhead_marker);
 
     // Track recording start position
     if (m_engine.is_recording_audio_tracks()) {
@@ -1546,6 +1632,19 @@ void TracksView::draw(wxDC& dc) {
                     }
                 }
                 const int row_end = std::min(pat_rows, (int)std::ceil((double)(view_right - px) / m_zoom) + 1);
+
+                // Pre-compute note lengths per column (O(R) per pattern instead of O(R²))
+                std::vector<int> note_lengths(pat_rows * num_cols, 1);
+                for (size_t c = 0; c < num_cols; ++c) {
+                    int last_event = pat_rows;
+                    for (int r = pat_rows - 1; r >= 0; --r) {
+                        if (pat.event(pattern_track_idx, r, c).note != 255) {
+                            note_lengths[c * pat_rows + r] = last_event - r;
+                            last_event = r;
+                        }
+                    }
+                }
+
                 for (int r = row_start; r < row_end; ++r) {
                     int nx = px + tick_to_x(r);
                     if (nx >= view_right) break;  // All subsequent rows are also off-screen
@@ -1559,17 +1658,7 @@ void TracksView::draw(wxDC& dc) {
                                     dc.DrawLine(nx, ty + 5, nx, ty + track_h_actual - 5);
                                 }
                             } else {
-                                // Find note length
-                                int note_len = 1;
-                                bool found_end = false;
-                                for (int r2 = r + 1; r2 < pat_rows; ++r2) {
-                                    if (pat.event(pattern_track_idx, r2, c).note != 255) {
-                                        note_len = r2 - r;
-                                        found_end = true;
-                                        break;
-                                    }
-                                }
-                                if (!found_end) note_len = pat_rows - r;
+                                const int note_len = note_lengths[c * pat_rows + r];
 
                                 if (content_inst && content_inst->type() == InstrumentType::Sampler) {
                                     SampleInstrument* sampler = static_cast<SampleInstrument*>(content_inst);
@@ -1648,25 +1737,6 @@ void TracksView::draw(wxDC& dc) {
         // Horizontal line between tracks
         dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_lpb_highlight)));
         dc.DrawLine(header_w, ty + track_h_actual - 1, header_w + tick_to_x(total_rows), ty + track_h_actual - 1);
-    }
-
-    // Current Playback Marker
-    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
-    dc.DrawLine(playhead_x, sticky_header_top, playhead_x, view_bottom);
-
-    // Recording region: vertical marker at recording start + shaded region up to play cursor
-    if (m_recording_start_tick >= 0 && m_engine.is_recording_audio_tracks()) {
-        const int rec_x = header_w + tick_to_x(m_recording_start_tick);
-        const int play_x = header_w + tick_to_x(play_tick);
-        // Shaded recording region
-        if (play_x > rec_x) {
-            dc.SetBrush(wxBrush(wxColour(200, 40, 40, 40)));
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.DrawRectangle(rec_x, sticky_header_top, play_x - rec_x, csize.GetHeight());
-        }
-        // Red vertical line at recording start
-        dc.SetPen(wxPen(wxColour(220, 60, 60), 2));
-        dc.DrawLine(rec_x, sticky_header_top, rec_x, view_bottom);
     }
 
     // Selection - highlight on selected track AND guide on all tracks
@@ -1750,6 +1820,64 @@ void TracksView::draw(wxDC& dc) {
             dc.DrawText("OUT", out_x - 13, view_y);
         }
     }
+
+    // During recording, VU meters and live waveform change every frame — force rebuild next paint.
+    if (m_engine.is_recording_audio_tracks()) {
+        m_static_dirty = true;
+    }
+}
+
+void TracksView::draw_dynamic(wxDC& dc) {
+    int vsx, vsy;
+    GetViewStart(&vsx, &vsy);
+    int sux, suy;
+    GetScrollPixelsPerUnit(&sux, &suy);
+    const int view_x = vsx * sux;
+    const int view_y = vsy * suy;
+    wxSize csize = GetClientSize();
+    const int view_bottom = view_y + csize.GetHeight();
+
+    const int header_w = kTrackHeaderWidth;
+    const int sticky_header_top = view_y;
+    const int sticky_header_bottom = sticky_header_top + kTracksContentTop;
+    const int sticky_timeline_top = sticky_header_top;
+    const int sticky_ruler_top = sticky_header_top + kTimelineHeaderHeight;
+    const int ruler_y = sticky_ruler_top + kPositionRulerHeight / 2;
+
+    const int playhead_x = header_w + tick_to_x(m_display_tick);
+
+    // Playhead marker in the ruler header
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor), 2));
+    dc.DrawLine(playhead_x, sticky_timeline_top + 1, playhead_x, sticky_header_bottom - 2);
+    dc.SetBrush(wxBrush(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
+    dc.SetPen(*wxTRANSPARENT_PEN);
+    wxPoint playhead_marker[] = {
+        wxPoint(playhead_x - 6, ruler_y + 1),
+        wxPoint(playhead_x + 6, ruler_y + 1),
+        wxPoint(playhead_x, sticky_header_bottom - 2)
+    };
+    dc.DrawPolygon(3, playhead_marker);
+
+    // Full-height playhead line
+    dc.SetPen(wxPen(ThemeManager::toWxColour(m_engine.m_tracker_cursor)));
+    dc.DrawLine(playhead_x, sticky_header_top, playhead_x, view_bottom);
+
+    // Recording region: shade from start to current position + start marker
+    if (m_recording_start_tick >= 0 && m_engine.is_recording_audio_tracks()) {
+        const int rec_x = header_w + tick_to_x(m_recording_start_tick);
+        const int play_x = header_w + tick_to_x(m_play_tick);
+        if (play_x > rec_x) {
+            dc.SetBrush(wxBrush(wxColour(200, 40, 40, 40)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(rec_x, sticky_header_top, play_x - rec_x, csize.GetHeight());
+        }
+        dc.SetPen(wxPen(wxColour(220, 60, 60), 2));
+        dc.DrawLine(rec_x, sticky_header_top, rec_x, view_bottom);
+    }
+}
+
+void TracksView::invalidate_static() {
+    m_static_dirty = true;
 }
 
 void TracksView::OnMouseDown(wxMouseEvent& event) {
@@ -1908,6 +2036,7 @@ void TracksView::update_view() {
     int total_w = kTrackHeaderWidth + tick_to_x(get_total_ticks()) + 50;
     total_h += 50;
     SetVirtualSize(total_w, total_h);
+    invalidate_static();
     Refresh(false);
 }
 
@@ -1941,19 +2070,17 @@ void TracksView::ensure_playhead_visible() {
 
     wxSize csize = GetClientSize();
     const int view_w = csize.GetWidth();
-    // Keep a comfortable margin so the playhead doesn't hug the right edge.
-    const int margin = std::max(50, view_w / 5);
     const int content_left = kTrackHeaderWidth; // header is always visible
 
-    // Content area starts after the sticky header; the actual scrollable content
-    // starts at kTrackHeaderWidth logical pixels. The visible content window is
-    // [scroll_px + content_left .. scroll_px + view_w].
+    // margin for "hugging" the right edge
+    const int margin = std::max(50, view_w / 5);
+
     const int vis_left  = scroll_px + content_left;
     const int vis_right = scroll_px + view_w - margin;
 
     if (logical_x > vis_right || logical_x < vis_left) {
-        // Scroll so that the playhead sits margin pixels from the right edge.
-        int new_scroll_px = logical_x - (view_w - margin);
+        // If the playhead is outside the visible area, center it.
+        int new_scroll_px = logical_x - (view_w / 2);
         if (new_scroll_px < 0) new_scroll_px = 0;
         Scroll(new_scroll_px / sux, vsy);
     }
@@ -2112,6 +2239,7 @@ void TracksView::set_marker_in_at(int unscrolled_x)
     const int row = x_to_tick(unscrolled_x - header_w);
     m_marker_in = std::max(0, row);
     m_engine.set_punch_in_row(m_marker_in);
+    invalidate_static();
     Refresh();
 }
 
@@ -2121,6 +2249,7 @@ void TracksView::set_marker_out_at(int unscrolled_x)
     const int row = x_to_tick(unscrolled_x - header_w);
     m_marker_out = std::max(0, row);
     m_engine.set_punch_out_row(m_marker_out);
+    invalidate_static();
     Refresh();
 }
 
@@ -2129,6 +2258,7 @@ void TracksView::clear_punch_markers()
     m_marker_in = -1;
     m_marker_out = -1;
     m_engine.clear_punch_markers();
+    invalidate_static();
     Refresh();
 }
 
@@ -2352,32 +2482,8 @@ void TracksView::do_redo() {
 
 std::vector<TracksView::AudioRegion> TracksView::detect_overlaps(const SampleInstrument* sampler) {
     std::vector<AudioRegion> regions;
-    
-    if (!sampler || sampler->sample_count() == 0) {
-        return regions;
-    }
-    
-    for (size_t i = 0; i < sampler->sample_count(); ++i) {
-        auto& sample = sampler->get_sample(i);
-        if (sample.data && !sample.data->left.empty()) {
-            AudioRegion region;
-            region.start_sample = 0;
-            region.end_sample = sample.data->left.size();
-            region.is_overlapping = false;
-            regions.push_back(region);
-        }
-    }
-    
-    for (size_t i = 0; i < regions.size(); ++i) {
-        for (size_t j = i + 1; j < regions.size(); ++j) {
-            if (regions[i].start_sample < regions[j].end_sample &&
-                regions[j].start_sample < regions[i].end_sample) {
-                regions[i].is_overlapping = true;
-                regions[j].is_overlapping = true;
-            }
-        }
-    }
-    
+    // DISABLED for performance. This O(N^2) loop over all sampler slots 
+    // was being called every frame we scroll, for every track.
     return regions;
 }
 

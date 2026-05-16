@@ -28,16 +28,20 @@ void SpectralView::update() {
     // Pull data from engine ringbuffer
     float val;
     bool has_data = false;
+    std::vector<float> popped;
     while (m_engine.m_spectral_rb.pop(val)) {
         has_data = true;
-        // Shift input and add new value
-        for (size_t i = 0; i < m_fft_size - 1; ++i) {
-            m_fft_input[i] = m_fft_input[i+1];
-        }
-        m_fft_input[m_fft_size-1] = val;
+        popped.push_back(val);
     }
     
     if (!has_data) return;
+
+    if (popped.size() >= m_fft_size) {
+        std::copy(popped.end() - m_fft_size, popped.end(), m_fft_input.begin());
+    } else {
+        std::move(m_fft_input.begin() + popped.size(), m_fft_input.end(), m_fft_input.begin());
+        std::copy(popped.begin(), popped.end(), m_fft_input.end() - popped.size());
+    }
 
     // Apply windowing (Hanning) and process
     std::vector<float> windowed(m_fft_size);

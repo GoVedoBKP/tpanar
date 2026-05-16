@@ -4,6 +4,7 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
+#include <wx/time.h>
 #include <algorithm>
 #include <cmath>
 
@@ -50,6 +51,12 @@ void VUMeter::level(float l) {
         std::fabs(previous_peak - m_peak_hold) < 0.002f) {
         return;
     }
+
+    long now = wxGetUTCTimeMillis().GetValue();
+    if (now - m_last_refresh_ms < 16) {
+        return;
+    }
+    m_last_refresh_ms = now;
 
     Refresh(false);
 }

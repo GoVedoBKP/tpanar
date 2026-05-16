@@ -115,6 +115,8 @@ void WaveformView::OnPaint(wxPaintEvent&) {
 
     // Waveform drawing helper — clips to [0, y_off, W, h]
     double spp = (double)(view_end - view_start) / W; // samples per pixel
+    const size_t block_size = 128;
+
     auto draw_channel = [&](const std::vector<float>& data, int y_off, int h, const wxString& label) {
         int mid_y = y_off + h / 2;
         // Zero line
@@ -127,6 +129,41 @@ void WaveformView::OnPaint(wxPaintEvent&) {
 
         dc.SetPen(wxPen(ThemeManager::toWxColour(m_color)));
         const int y_top = y_off, y_bot = y_off + h;
+
+        if (spp > (double)block_size * 0.5) {
+            m_sample->update_overview(block_size);
+            const auto& overview = *m_sample->overview;
+            const auto& ov_data = (&data == &m_sample->left) ? overview.left : overview.right;
+            if (ov_data.empty()) return;
+
+            for (int i = 0; i < W; ++i) {
+                size_t start_s = view_start + (size_t)(i * spp);
+                size_t end_s   = view_start + (size_t)((i + 1) * spp);
+                if (end_s > data.size()) end_s = data.size();
+                if (start_s >= end_s) continue;
+
+                size_t start_b = start_s / block_size;
+                size_t end_b = (end_s + block_size - 1) / block_size;
+                if (start_b >= ov_data.size()) continue;
+                if (end_b > ov_data.size()) end_b = ov_data.size();
+
+                float min_v = 1.0f, max_v = -1.0f;
+                for (size_t b = start_b; b < end_b; ++b) {
+                    min_v = std::min(min_v, ov_data[b].min);
+                    max_v = std::max(max_v, ov_data[b].max);
+                }
+
+                int y1 = mid_y + (int)(min_v * (h / 2 - 2));
+                int y2 = mid_y + (int)(max_v * (h / 2 - 2));
+                y1 = std::max(y1, y_top);
+                y2 = std::min(y2, y_bot - 1);
+                if (y1 > y2) std::swap(y1, y2);
+                if (y1 == y2) dc.DrawPoint(i, y1);
+                else          dc.DrawLine(i, y1, i, y2);
+            }
+            return;
+        }
+
         for (int i = 0; i < W; ++i) {
             size_t s = view_start + (size_t)(i * spp);
             size_t e = view_start + (size_t)((i + 1) * spp);

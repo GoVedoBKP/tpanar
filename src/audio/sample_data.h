@@ -20,9 +20,18 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <memory>
 
 namespace tpanar_ns
 {
+
+    struct WaveformOverview
+    {
+        struct MinMax { float min, max; };
+        ::std::vector<MinMax> left;
+        ::std::vector<MinMax> right;
+        size_t block_size = 128;
+    };
 
     struct SampleData
     {
@@ -30,18 +39,24 @@ namespace tpanar_ns
         ::std::vector<float> right;
         int sample_rate = 44100;
 
-        void to_mono_l() { right.clear(); }
-        void to_mono_r() { if (!right.empty()) left = right; right.clear(); }
+        mutable ::std::shared_ptr<WaveformOverview> overview;
+
+        void invalidate_overview() { overview.reset(); }
+
+        void to_mono_l() { right.clear(); invalidate_overview(); }
+        void to_mono_r() { if (!right.empty()) left = right; right.clear(); invalidate_overview(); }
         void to_mono_mix() {
             if (right.empty()) return;
             for (size_t i = 0; i < left.size(); ++i) {
                 left[i] = (left[i] + right[i]) * 0.5f;
             }
             right.clear();
+            invalidate_overview();
         }
         void to_stereo() {
             if (!right.empty()) return;
             right = left;
+            invalidate_overview();
         }
 
         void normalize(size_t start, size_t end) {
@@ -57,6 +72,7 @@ namespace tpanar_ns
                 left[i] *= factor;
                 if (!right.empty()) right[i] *= factor;
             }
+            invalidate_overview();
         }
 
         void adjust_volume(size_t start, size_t end, float factor) {
@@ -65,6 +81,7 @@ namespace tpanar_ns
                 left[i] *= factor;
                 if (!right.empty()) right[i] *= factor;
             }
+            invalidate_overview();
         }
 
         void silence(size_t start, size_t end) {
@@ -73,6 +90,7 @@ namespace tpanar_ns
                 left[i] = 0.0f;
                 if (!right.empty()) right[i] = 0.0f;
             }
+            invalidate_overview();
         }
 
         void insert_silence(size_t pos, size_t len) {
@@ -81,6 +99,7 @@ namespace tpanar_ns
             if (!right.empty()) {
                 right.insert(right.begin() + pos, len, 0.0f);
             }
+            invalidate_overview();
         }
 
         void crop(size_t start, size_t end) {
@@ -90,6 +109,7 @@ namespace tpanar_ns
             if (!right.empty()) {
                 right.assign(right.begin() + start, right.begin() + end);
             }
+            invalidate_overview();
         }
 
         void fade_in(size_t start, size_t end, bool log) {
@@ -102,6 +122,7 @@ namespace tpanar_ns
                 left[start + i] *= gain;
                 if (!right.empty()) right[start + i] *= gain;
             }
+            invalidate_overview();
         }
 
         void fade_out(size_t start, size_t end, bool log) {
@@ -114,6 +135,7 @@ namespace tpanar_ns
                 left[start + i] *= gain;
                 if (!right.empty()) right[start + i] *= gain;
             }
+            invalidate_overview();
         }
 
         SampleData cut(size_t start, size_t end) {
@@ -129,6 +151,7 @@ namespace tpanar_ns
                 result.right.assign(right.begin() + start, right.begin() + end);
                 right.erase(right.begin() + start, right.begin() + end);
             }
+            invalidate_overview();
             return result;
         }
 
@@ -141,6 +164,33 @@ namespace tpanar_ns
             } else if (!right.empty()) {
                 right.insert(right.begin() + pos, other.left.size(), 0.0f);
             }
+            invalidate_overview();
+        }
+
+        void update_overview(size_t block_size = 128) const {
+            if (overview && overview->block_size == block_size) return;
+            
+            overview = std::make_shared<WaveformOverview>();
+            overview->block_size = block_size;
+            
+            auto generate = [&](const std::vector<float>& data, std::vector<WaveformOverview::MinMax>& dest) {
+                if (data.empty()) return;
+                size_t num_blocks = (data.size() + block_size - 1) / block_size;
+                dest.reserve(num_blocks);
+                for (size_t b = 0; b < num_blocks; ++b) {
+                    size_t b_start = b * block_size;
+                    size_t b_end = std::min(b_start + block_size, data.size());
+                    float min_v = 1.0f, max_v = -1.0f;
+                    for (size_t s = b_start; s < b_end; ++s) {
+                        if (data[s] < min_v) min_v = data[s];
+                        if (data[s] > max_v) max_v = data[s];
+                    }
+                    dest.push_back({min_v, max_v});
+                }
+            };
+            
+            generate(left, overview->left);
+            generate(right, overview->right);
         }
     };
 
