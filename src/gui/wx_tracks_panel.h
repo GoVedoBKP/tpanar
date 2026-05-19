@@ -106,6 +106,8 @@ public:
     void do_paste();
     void do_silence();
     void do_insert_silence();
+    void do_create_sfz_instrument();
+    void do_create_sfz_drumkit();
     void do_retrigger_stretch_selection();
     void do_retrigger_stretch_whole_track();
     void do_undo();
@@ -128,6 +130,7 @@ private:
     int tick_to_x(int tick);
     int x_to_tick(int x);
     int get_track_height(int track_idx) const;
+    int track_at_y(int logical_y) const;
     void toggle_track_minimize(int track_idx);
     int resolve_content_track_index(int display_track_idx) const;
     bool is_track_selected(int track_idx) const;

@@ -24,6 +24,7 @@
 #include "../audio/oss_backend.h"
 #include "../audio/null_backend.h"
 #include "../audio/timestretch.h"
+#include "../io/audio_file.h"
 #include "../sequencer/timing.h"
 #include "../sequencer/pattern.h"
 #include "../mixer/track.h"
@@ -149,8 +150,28 @@ struct AnalysisBandpass {
 
 struct DetectedHit {
     size_t absolute_row = 0;
+    size_t onset_sample = 0;
+    size_t peak_sample = 0;
+    size_t next_onset_sample = 0;
     uint8_t volume = 0;
 };
+
+struct GeneratedSfzRegion {
+    std::string sample_path;
+    int lovel = 1;
+    int hivel = 127;
+    int seq_length = 0;
+    int seq_position = 0;
+};
+
+struct GeneratedSfzGroup {
+    std::string name;
+    int key = 36;
+    float release_seconds = 0.18f;
+    std::vector<GeneratedSfzRegion> regions;
+};
+
+bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std::vector<DetectedHit>& hits);
 
 size_t total_song_rows(const Engine& engine)
 {
@@ -159,6 +180,501 @@ size_t total_song_rows(const Engine& engine)
         if (pat_idx < engine.pattern_count()) total_rows += engine.pattern(pat_idx).row_count();
     }
     return total_rows;
+}
+
+uint8_t resolve_sfz_root_note(const Engine& engine, size_t audio_track_index)
+{
+    if (audio_track_index < engine.track_count()) {
+        const Track& audio_track = engine.track(audio_track_index);
+        const int linked_track_index = audio_track.linked_track();
+        if (linked_track_index >= 0 && (size_t)linked_track_index < engine.track_count()) {
+            std::array<size_t, 128> note_counts{};
+            for (size_t pat_idx : engine.order_list()) {
+                if (pat_idx >= engine.pattern_count()) continue;
+                const Pattern& pat = engine.pattern(pat_idx);
+                if ((size_t)linked_track_index >= pat.track_count()) continue;
+                const size_t col_count = pat.column_count((size_t)linked_track_index);
+                for (size_t row = 0; row < pat.row_count(); ++row) {
+                    for (size_t col = 0; col < col_count; ++col) {
+                        const uint8_t note = pat.event((size_t)linked_track_index, row, col).note;
+                        if (note != NOTE_EMPTY && note != 254 && note < note_counts.size()) {
+                            ++note_counts[note];
+                        }
+                    }
+                }
+            }
+
+            size_t best_count = 0;
+            uint8_t best_note = 0;
+            for (size_t note = 0; note < note_counts.size(); ++note) {
+                if (note_counts[note] > best_count) {
+                    best_count = note_counts[note];
+                    best_note = (uint8_t)note;
+                }
+            }
+            if (best_count > 0) return best_note;
+        }
+
+        const uint8_t drum_note = drum_type_info(audio_track.drum_type()).midi_note;
+        if (drum_note > 0) return drum_note;
+    }
+
+    return 36;
+}
+
+bool is_cymbal_like_drum(DrumType type)
+{
+    switch (type) {
+        case DrumType::ClosedHiHat:
+        case DrumType::PedalHiHat:
+        case DrumType::OpenHiHat:
+        case DrumType::CrashCymbal1:
+        case DrumType::RideCymbal1:
+        case DrumType::RideBell:
+        case DrumType::CrashCymbal2:
+        case DrumType::RideCymbal2:
+        case DrumType::AnyHiHat:
+        case DrumType::AnyRide:
+            return true;
+        default:
+            return false;
+    }
+}
+
+float sample_abs_mono(const SampleData& sample, size_t index)
+{
+    if (index >= sample.left.size()) return 0.0f;
+    float mono = sample.left[index];
+    if (!sample.right.empty() && index < sample.right.size()) {
+        mono = 0.5f * (mono + sample.right[index]);
+    }
+    return std::abs(mono);
+}
+
+std::vector<float> build_abs_mono_signal(const SampleData& sample)
+{
+    const size_t frames = sample.left.size();
+    std::vector<float> abs_mono(frames, 0.0f);
+    for (size_t i = 0; i < frames; ++i) {
+        abs_mono[i] = sample_abs_mono(sample, i);
+    }
+    return abs_mono;
+}
+
+std::vector<double> build_prefix_sum(const std::vector<float>& signal)
+{
+    std::vector<double> prefix(signal.size() + 1, 0.0);
+    for (size_t i = 0; i < signal.size(); ++i) {
+        prefix[i + 1] = prefix[i] + (double)signal[i];
+    }
+    return prefix;
+}
+
+float mean_abs_window(const std::vector<double>& prefix, size_t start, size_t end)
+{
+    if (prefix.empty()) return 0.0f;
+    const size_t max_index = prefix.size() - 1;
+    const size_t clamped_start = std::min(start, max_index);
+    const size_t clamped_end = std::min(std::max(end, clamped_start + 1), max_index);
+    const size_t count = clamped_end - clamped_start;
+    if (count == 0) return 0.0f;
+    return (float)((prefix[clamped_end] - prefix[clamped_start]) / (double)count);
+}
+
+size_t refine_peak_sample(const std::vector<double>& prefix, size_t rough_sample, float sample_rate)
+{
+    if (prefix.size() <= 1) return 0;
+
+    const size_t frame_count = prefix.size() - 1;
+    const size_t smoothing_radius = std::max<size_t>(4, (size_t)std::lround(sample_rate * 0.0005));
+    const size_t search_back = std::max<size_t>(8, (size_t)std::lround(sample_rate * 0.004));
+    const size_t search_forward = std::max<size_t>(16, (size_t)std::lround(sample_rate * 0.018));
+    const size_t start = (rough_sample > search_back) ? (rough_sample - search_back) : 0;
+    const size_t end = std::min(frame_count, rough_sample + search_forward + 1);
+
+    float best_level = -1.0f;
+    size_t best_index = std::min(rough_sample, frame_count - 1);
+    for (size_t i = start; i < end; ++i) {
+        const size_t win_start = (i > smoothing_radius) ? (i - smoothing_radius) : 0;
+        const size_t win_end = std::min(frame_count, i + smoothing_radius + 1);
+        const float level = mean_abs_window(prefix, win_start, win_end);
+        if (level > best_level) {
+            best_level = level;
+            best_index = i;
+        }
+    }
+
+    return best_index;
+}
+
+size_t refine_onset_sample(const std::vector<double>& prefix, size_t peak_sample, float sample_rate)
+{
+    if (prefix.size() <= 1) return 0;
+
+    const size_t frame_count = prefix.size() - 1;
+    const size_t smoothing_radius = std::max<size_t>(4, (size_t)std::lround(sample_rate * 0.0005));
+    const size_t look_back = std::max<size_t>(32, (size_t)std::lround(sample_rate * 0.03));
+    const size_t noise_gap = std::max<size_t>(8, (size_t)std::lround(sample_rate * 0.004));
+    const size_t noise_span = std::max<size_t>(32, (size_t)std::lround(sample_rate * 0.02));
+
+    const size_t peak_win_start = (peak_sample > smoothing_radius) ? (peak_sample - smoothing_radius) : 0;
+    const size_t peak_win_end = std::min(frame_count, peak_sample + smoothing_radius + 1);
+    const float peak_level = mean_abs_window(prefix, peak_win_start, peak_win_end);
+
+    const size_t noise_end = (peak_sample > noise_gap) ? (peak_sample - noise_gap) : 0;
+    const size_t noise_start = (noise_end > noise_span) ? (noise_end - noise_span) : 0;
+    const float noise_level = mean_abs_window(prefix, noise_start, noise_end);
+    const float rise_threshold = std::max(0.0010f, std::max(noise_level * 2.5f, peak_level * 0.10f));
+
+    const size_t min_index = (peak_sample > look_back) ? (peak_sample - look_back) : 0;
+    size_t onset = min_index;
+    for (size_t i = peak_sample; i > min_index; --i) {
+        const size_t sample_index = i - 1;
+        const size_t win_start = (sample_index > smoothing_radius) ? (sample_index - smoothing_radius) : 0;
+        const size_t win_end = std::min(frame_count, sample_index + smoothing_radius + 1);
+        const float level = mean_abs_window(prefix, win_start, win_end);
+        if (level <= rise_threshold) {
+            onset = sample_index;
+            break;
+        }
+    }
+
+    return onset;
+}
+
+size_t refine_slice_end_sample(const std::vector<double>& prefix,
+                               size_t peak_sample,
+                               size_t min_end_sample,
+                               size_t max_end_sample,
+                               float sample_rate,
+                               bool cymbal_like)
+{
+    if (prefix.size() <= 1) return max_end_sample;
+
+    const size_t frame_count = prefix.size() - 1;
+    const size_t smoothing_radius = std::max<size_t>(4, (size_t)std::lround(sample_rate * 0.0008));
+    const size_t hold_samples = std::max<size_t>(16, (size_t)std::lround(sample_rate * (cymbal_like ? 0.030 : 0.010)));
+    const size_t tail_pad = std::max<size_t>(64, (size_t)std::lround(sample_rate * (cymbal_like ? 0.020 : 0.008)));
+
+    const size_t peak_win_start = (peak_sample > smoothing_radius) ? (peak_sample - smoothing_radius) : 0;
+    const size_t peak_win_end = std::min(frame_count, peak_sample + smoothing_radius + 1);
+    const float peak_level = mean_abs_window(prefix, peak_win_start, peak_win_end);
+    const float tail_threshold = std::max(0.0012f, peak_level * (cymbal_like ? 0.035f : 0.055f));
+
+    const size_t search_start = std::min(std::max(min_end_sample, peak_sample + hold_samples), frame_count);
+    const size_t search_end = std::min(std::max(max_end_sample, search_start), frame_count);
+
+    size_t quiet_run = 0;
+    for (size_t i = search_start; i < search_end; ++i) {
+        const size_t win_start = (i > smoothing_radius) ? (i - smoothing_radius) : 0;
+        const size_t win_end = std::min(frame_count, i + smoothing_radius + 1);
+        const float level = mean_abs_window(prefix, win_start, win_end);
+        if (level <= tail_threshold) {
+            ++quiet_run;
+            if (quiet_run >= hold_samples) {
+                return std::min(frame_count, i + tail_pad + 1);
+            }
+        } else {
+            quiet_run = 0;
+        }
+    }
+
+    return search_end;
+}
+
+bool prepare_sfz_output_paths(const std::string& requested_path,
+                              size_t fallback_index,
+                              fs::path& sfz_file,
+                              fs::path& samples_dir,
+                              std::string& asset_stem,
+                              std::string& error_message)
+{
+    if (requested_path.empty()) {
+        error_message = "Choose an output .sfz path.";
+        return false;
+    }
+
+    sfz_file = fs::path(requested_path);
+    if (sfz_file.extension().empty()) {
+        sfz_file.replace_extension(".sfz");
+    }
+
+    std::error_code fs_error;
+    fs::path parent_dir = sfz_file.parent_path();
+    if (parent_dir.empty()) {
+        parent_dir = fs::current_path(fs_error);
+        if (fs_error) {
+            error_message = "Could not resolve the destination folder.";
+            return false;
+        }
+        sfz_file = parent_dir / sfz_file.filename();
+    }
+
+    fs::create_directories(parent_dir, fs_error);
+    if (fs_error) {
+        error_message = "Could not create the destination folder.";
+        return false;
+    }
+
+    asset_stem = sanitize_export_stem_name(sfz_file.stem().string(), fallback_index);
+    samples_dir = parent_dir / (asset_stem + "_samples");
+    fs::create_directories(samples_dir, fs_error);
+    if (fs_error) {
+        error_message = "Could not create the SFZ sample folder.";
+        return false;
+    }
+
+    return true;
+}
+
+bool generate_sfz_group_from_audio_track(const Engine& engine,
+                                         size_t audio_track_index,
+                                         const fs::path& samples_dir,
+                                         const std::string& asset_prefix,
+                                         GeneratedSfzGroup& group_out,
+                                         std::string& error_message)
+{
+    if (audio_track_index >= engine.track_count() || engine.is_tempo_track(audio_track_index)) {
+        error_message = "Select a valid audio track.";
+        return false;
+    }
+
+    const Track& audio_track = engine.track(audio_track_index);
+    if (audio_track.kind() != TrackKind::Audio) {
+        error_message = "SFZ creation works only for audio tracks.";
+        return false;
+    }
+    if (!audio_track.instrument() || audio_track.instrument()->type() != InstrumentType::Sampler) {
+        error_message = "The selected track needs a sampler-backed take.";
+        return false;
+    }
+
+    auto sample = resolve_audio_track_sample(engine, audio_track_index);
+    if (!sample || sample->left.empty()) {
+        error_message = "The selected track has no audio take to extract.";
+        return false;
+    }
+
+    std::vector<DetectedHit> hits;
+    if (!detect_audio_track_hits(engine, audio_track_index, hits)) {
+        error_message = "No drum hits were detected on this track.";
+        return false;
+    }
+
+    const size_t total_frames = std::max(sample->left.size(), sample->right.size());
+    if (total_frames == 0) {
+        error_message = "The selected take is empty.";
+        return false;
+    }
+
+    const float sample_rate = sample->sample_rate > 0 ? (float)sample->sample_rate : (float)engine.sample_rate();
+    const size_t pre_roll_frames = std::max<size_t>(1, (size_t)std::lround(sample_rate * 0.004));
+    const size_t min_frames = std::max<size_t>(256, (size_t)std::lround(sample_rate * 0.035));
+    const bool cymbal_like = is_cymbal_like_drum(audio_track.drum_type());
+    const size_t max_frames = std::max<size_t>(
+        min_frames,
+        (size_t)std::lround(sample_rate * (cymbal_like ? 2.5 : 1.25)));
+    const bool has_right = !sample->right.empty();
+    const auto abs_mono = build_abs_mono_signal(*sample);
+    const auto abs_prefix = build_prefix_sum(abs_mono);
+
+    for (size_t i = 0; i < hits.size(); ++i) {
+        hits[i].next_onset_sample = (i + 1 < hits.size()) ? hits[i + 1].onset_sample : total_frames;
+    }
+
+    std::sort(hits.begin(), hits.end(), [](const DetectedHit& a, const DetectedHit& b) {
+        return a.volume < b.volume;
+    });
+
+    const size_t layer_count = std::min<size_t>(6, std::max<size_t>(1, hits.size() / 4));
+    const size_t max_variations_per_layer = 6;
+    std::vector<GeneratedSfzRegion> regions;
+    regions.reserve(std::min(hits.size(), layer_count * max_variations_per_layer));
+
+    auto capture_hit_to_file = [&](const DetectedHit& hit, const std::string& sample_file_name, std::string& rel_path_out) -> bool {
+        const size_t onset = std::min(hit.onset_sample, total_frames - 1);
+        const size_t peak = std::min(hit.peak_sample, total_frames - 1);
+        const size_t next_onset = std::max(peak + 1, std::min(hit.next_onset_sample, total_frames));
+
+        size_t start_sample = (onset > pre_roll_frames) ? (onset - pre_roll_frames) : 0;
+        size_t max_end_sample = std::min(total_frames, peak + max_frames);
+        if (next_onset > peak) {
+            const size_t guard = std::max<size_t>(32, (size_t)std::lround(sample_rate * 0.006));
+            if (next_onset > guard) {
+                max_end_sample = std::min(max_end_sample, next_onset - guard);
+            } else {
+                max_end_sample = std::min(max_end_sample, next_onset);
+            }
+        }
+        size_t min_end_sample = std::min(total_frames, onset + min_frames);
+        if (max_end_sample <= min_end_sample) {
+            max_end_sample = std::min(total_frames, min_end_sample + std::max<size_t>(64, pre_roll_frames));
+        }
+        if (max_end_sample <= start_sample) {
+            return false;
+        }
+
+        size_t end_sample = refine_slice_end_sample(abs_prefix,
+                                                    peak,
+                                                    min_end_sample,
+                                                    max_end_sample,
+                                                    sample_rate,
+                                                    cymbal_like);
+        if (end_sample <= start_sample + min_frames) {
+            end_sample = std::min(total_frames, start_sample + min_frames);
+        }
+        if (end_sample <= start_sample) {
+            return false;
+        }
+
+        std::vector<float> left(sample->left.begin() + start_sample,
+                                sample->left.begin() + std::min(end_sample, sample->left.size()));
+        if (left.empty()) {
+            return false;
+        }
+
+        std::vector<float> right;
+        if (has_right) {
+            const size_t right_end = std::min(end_sample, sample->right.size());
+            if (right_end > start_sample) {
+                right.assign(sample->right.begin() + start_sample, sample->right.begin() + right_end);
+            }
+            if (right.size() != left.size()) {
+                right.resize(left.size(), right.empty() ? 0.0f : right.back());
+            }
+        }
+
+        const fs::path sample_path = samples_dir / sample_file_name;
+        if (!AudioFile::save_wav(sample_path.string(), left, right, (uint32_t)std::lround(sample_rate))) {
+            return false;
+        }
+
+        rel_path_out = (samples_dir.filename() / sample_file_name).generic_string();
+        return true;
+    };
+
+    for (size_t layer = 0; layer < layer_count; ++layer) {
+        const size_t begin = (layer * hits.size()) / layer_count;
+        const size_t end = ((layer + 1) * hits.size()) / layer_count;
+        if (end <= begin) continue;
+
+        const int layer_min = hits[begin].volume;
+        const int layer_max = hits[end - 1].volume;
+        const int lovel = (layer == 0)
+            ? 1
+            : std::clamp(((int)hits[begin - 1].volume + layer_min) / 2 + 1, 1, 127);
+        const int hivel = (layer + 1 == layer_count)
+            ? 127
+            : std::clamp((layer_max + (int)hits[end].volume) / 2, lovel, 127);
+
+        const size_t layer_hit_count = end - begin;
+        const size_t variation_count = std::min(max_variations_per_layer, layer_hit_count);
+        size_t written_for_layer = 0;
+        for (size_t v = 0; v < variation_count; ++v) {
+            const size_t idx = (variation_count == 1)
+                ? begin + layer_hit_count / 2
+                : begin + (v * (layer_hit_count - 1)) / (variation_count - 1);
+            std::string relative_sample_path;
+            const std::string sample_file_name =
+                asset_prefix + "_" + std::to_string(layer + 1) + "_" + std::to_string(v + 1) + ".wav";
+            if (!capture_hit_to_file(hits[idx], sample_file_name, relative_sample_path)) {
+                continue;
+            }
+
+            ++written_for_layer;
+            regions.push_back({relative_sample_path, lovel, hivel, (int)variation_count, (int)written_for_layer});
+        }
+
+        if (written_for_layer > 0) {
+            for (size_t idx = regions.size() - written_for_layer; idx < regions.size(); ++idx) {
+                regions[idx].seq_length = (int)written_for_layer;
+                regions[idx].seq_position = (int)(idx - (regions.size() - written_for_layer)) + 1;
+            }
+        }
+    }
+
+    if (regions.empty()) {
+        error_message = "The detected hits could not be extracted into sample files.";
+        return false;
+    }
+
+    group_out.name = audio_track.name();
+    group_out.key = (int)resolve_sfz_root_note(engine, audio_track_index);
+    group_out.release_seconds = cymbal_like ? 0.35f : 0.18f;
+    group_out.regions = std::move(regions);
+    return true;
+}
+
+bool write_generated_sfz(const fs::path& sfz_file,
+                         const std::string& title,
+                         const std::vector<GeneratedSfzGroup>& groups)
+{
+    std::ofstream sfz_out(sfz_file);
+    if (!sfz_out.is_open()) {
+        return false;
+    }
+
+    sfz_out << "// Generated by TPanar";
+    if (!title.empty()) {
+        sfz_out << " for \"" << title << "\"";
+    }
+    sfz_out << "\n";
+
+    for (size_t group_index = 0; group_index < groups.size(); ++group_index) {
+        const auto& group = groups[group_index];
+        sfz_out << "\n// " << group.name << "\n";
+        sfz_out << "<group> key=" << group.key
+                << " pitch_keycenter=" << group.key
+                << " ampeg_attack=0.001 ampeg_decay=0.01 ampeg_sustain=100 ampeg_release="
+                << group.release_seconds
+                << "\n";
+        for (const auto& region : group.regions) {
+            sfz_out << "<region> sample=" << region.sample_path
+                    << " key=" << group.key
+                    << " pitch_keycenter=" << group.key
+                    << " lovel=" << region.lovel
+                    << " hivel=" << region.hivel;
+            if (region.seq_length > 1) {
+                sfz_out << " seq_length=" << region.seq_length
+                        << " seq_position=" << region.seq_position;
+            }
+            sfz_out << "\n";
+        }
+    }
+
+    return true;
+}
+
+bool finalize_generated_sfz_instrument(Engine& engine,
+                                       const fs::path& sfz_file,
+                                       const std::string& instrument_name,
+                                       const std::vector<size_t>& assign_note_tracks,
+                                       size_t* instrument_index_out,
+                                       std::string* error_message_out)
+{
+    engine.add_instrument();
+    const size_t new_instrument_index = engine.instrument_count() - 1;
+    engine.set_instrument_type(new_instrument_index, InstrumentType::SFZ);
+    Instrument& new_instrument = engine.instrument(new_instrument_index);
+    new_instrument.set_name(instrument_name);
+    auto& sfz_instrument = static_cast<SfzInstrument&>(new_instrument);
+    if (!sfz_instrument.load_sfz(sfz_file.string())) {
+        engine.remove_instrument(new_instrument_index);
+        if (instrument_index_out) *instrument_index_out = (size_t)-1;
+        if (error_message_out) *error_message_out = "The generated SFZ could not be loaded back into TPanar.";
+        return false;
+    }
+
+    for (size_t note_track_index : assign_note_tracks) {
+        if (note_track_index < engine.track_count() && engine.track(note_track_index).kind() == TrackKind::Note) {
+            engine.track(note_track_index).set_instrument(&new_instrument);
+        }
+    }
+
+    engine.mark_dirty();
+    if (instrument_index_out) *instrument_index_out = new_instrument_index;
+    if (error_message_out) error_message_out->clear();
+    return true;
 }
 
 bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std::vector<DetectedHit>& hits)
@@ -184,6 +700,8 @@ bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std
     const float sample_rate = sample->sample_rate > 0 ? (float)sample->sample_rate : (float)engine.sample_rate();
     const size_t sample_count = sample->left.size();
     const bool has_right = !sample->right.empty();
+    const auto abs_mono = build_abs_mono_signal(*sample);
+    const auto abs_prefix = build_prefix_sum(abs_mono);
 
     const bool use_band = drum.min_hz > 0.0f && drum.max_hz > drum.min_hz;
     AnalysisBandpass bandpass;
@@ -266,14 +784,17 @@ bool detect_audio_track_hits(const Engine& engine, size_t audio_track_index, std
             if (!found) onset_frame = i - max_look;
         }
 
-        const double time_seconds = (double)centers[onset_frame] / (double)sample_rate;
+        const size_t rough_onset_sample = centers[onset_frame];
+        const size_t peak_sample = refine_peak_sample(abs_prefix, rough_onset_sample, sample_rate);
+        const size_t onset_sample = refine_onset_sample(abs_prefix, peak_sample, sample_rate);
+        const double time_seconds = (double)onset_sample / (double)sample_rate;
         // Use double-precision math to find the fractional row, then round to the nearest tracker row.
         const size_t absolute_row = (size_t)std::llround(time_seconds * engine_rows_per_second);
         if (absolute_row >= song_rows) continue;
 
         const float normalized = std::sqrt(std::clamp(local / peak_energy, 0.0f, 1.0f));
         const uint8_t volume = (uint8_t)std::clamp((int)std::lround(20.0f + normalized * 107.0f), 1, 127);
-        hits.push_back({absolute_row, volume});
+        hits.push_back({absolute_row, onset_sample, peak_sample, 0, volume});
         last_hit_frame = i;
         have_last_hit = true;
     }
@@ -2627,6 +3148,114 @@ bool Engine::analyze_audio_track(size_t audio_track_index)
 
     mark_dirty();
     return true;
+}
+
+bool Engine::create_sfz_instrument_from_audio_track(size_t audio_track_index,
+                                                    const std::string& sfz_path,
+                                                    size_t* instrument_index_out,
+                                                    std::string* error_message_out)
+{
+    auto fail = [&](const std::string& message) {
+        if (instrument_index_out) *instrument_index_out = (size_t)-1;
+        if (error_message_out) *error_message_out = message;
+        return false;
+    };
+
+    fs::path sfz_file;
+    fs::path samples_dir;
+    std::string asset_stem;
+    std::string error_message;
+    if (!prepare_sfz_output_paths(sfz_path, audio_track_index + 1, sfz_file, samples_dir, asset_stem, error_message)) {
+        return fail(error_message);
+    }
+
+    GeneratedSfzGroup group;
+    if (!generate_sfz_group_from_audio_track(*this, audio_track_index, samples_dir, asset_stem, group, error_message)) {
+        return fail(error_message);
+    }
+
+    if (!write_generated_sfz(sfz_file, m_tracks[audio_track_index].name(), {group})) {
+        return fail("Could not write the SFZ file.");
+    }
+
+    std::vector<size_t> assign_note_tracks;
+    const int linked_track_index = m_tracks[audio_track_index].linked_track();
+    if (linked_track_index >= 0 &&
+        (size_t)linked_track_index < m_tracks.size() &&
+        m_tracks[(size_t)linked_track_index].kind() == TrackKind::Note) {
+        assign_note_tracks.push_back((size_t)linked_track_index);
+    }
+
+    return finalize_generated_sfz_instrument(*this,
+                                             sfz_file,
+                                             m_tracks[audio_track_index].name() + " SFZ",
+                                             assign_note_tracks,
+                                             instrument_index_out,
+                                             error_message_out);
+}
+
+bool Engine::create_sfz_instrument_from_all_audio_tracks(const std::string& sfz_path,
+                                                         size_t* instrument_index_out,
+                                                         std::string* error_message_out)
+{
+    auto fail = [&](const std::string& message) {
+        if (instrument_index_out) *instrument_index_out = (size_t)-1;
+        if (error_message_out) *error_message_out = message;
+        return false;
+    };
+
+    fs::path sfz_file;
+    fs::path samples_dir;
+    std::string asset_stem;
+    std::string error_message;
+    if (!prepare_sfz_output_paths(sfz_path, track_count(), sfz_file, samples_dir, asset_stem, error_message)) {
+        return fail(error_message);
+    }
+
+    std::vector<GeneratedSfzGroup> groups;
+    std::vector<size_t> assign_note_tracks;
+    std::unordered_set<size_t> assigned_track_set;
+
+    for (size_t track_index = 0; track_index < m_tracks.size(); ++track_index) {
+        if (is_tempo_track(track_index)) continue;
+        const Track& track = m_tracks[track_index];
+        if (track.kind() != TrackKind::Audio) continue;
+        if (!track.instrument() || track.instrument()->type() != InstrumentType::Sampler) continue;
+        auto sample = resolve_audio_track_sample(*this, track_index);
+        if (!sample || sample->left.empty()) continue;
+
+        GeneratedSfzGroup group;
+        const std::string prefix =
+            asset_stem + "_" + sanitize_export_stem_name(track.name(), track_index + 1);
+        std::string track_error;
+        if (!generate_sfz_group_from_audio_track(*this, track_index, samples_dir, prefix, group, track_error)) {
+            continue;
+        }
+        groups.push_back(std::move(group));
+
+        const int linked_track_index = track.linked_track();
+        if (linked_track_index >= 0 &&
+            (size_t)linked_track_index < m_tracks.size() &&
+            m_tracks[(size_t)linked_track_index].kind() == TrackKind::Note &&
+            assigned_track_set.insert((size_t)linked_track_index).second) {
+            assign_note_tracks.push_back((size_t)linked_track_index);
+        }
+    }
+
+    if (groups.empty()) {
+        return fail("No eligible audio drum tracks with detectable hits were found.");
+    }
+
+    if (!write_generated_sfz(sfz_file, "all tracks", groups)) {
+        return fail("Could not write the SFZ file.");
+    }
+
+    return finalize_generated_sfz_instrument(*this,
+                                             sfz_file,
+                                             sfz_file.stem().string().empty() ? "Drum Kit SFZ" : sfz_file.stem().string(),
+                                             assign_note_tracks,
+                                             instrument_index_out,
+                                             error_message_out);
 }
 
 bool Engine::retrigger_stretch_audio_track(size_t audio_track_index,

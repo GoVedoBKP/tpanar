@@ -236,6 +236,13 @@ public:
     void ensure_tempo_track();
     void ensure_pilot_track();
     bool analyze_audio_track(size_t audio_track_index);
+    bool create_sfz_instrument_from_audio_track(size_t audio_track_index,
+                                                const std::string& sfz_path,
+                                                size_t* instrument_index_out = nullptr,
+                                                std::string* error_message_out = nullptr);
+    bool create_sfz_instrument_from_all_audio_tracks(const std::string& sfz_path,
+                                                     size_t* instrument_index_out = nullptr,
+                                                     std::string* error_message_out = nullptr);
     bool quantize_note_track(size_t note_track_index, bool align_to_click);
     bool retrigger_stretch_audio_track(size_t audio_track_index,
                                        bool use_selection = false,

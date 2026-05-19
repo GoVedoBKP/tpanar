@@ -43,7 +43,7 @@ void HelpPanel::load_documentation() {
 <table width="100%" border="0" cellpadding="4">
 <tr><td valign="top"><b>Project</b></td><td>Track pairing, linked-track routing, drum role, analysis/quantize actions, output bus, audio input selector, and note-track humanization.</td></tr>
 <tr><td valign="top"><b>Tracker</b></td><td>Tempo plus note tracks only. Each note track shows note/volume columns, with up to three sub-columns per track.</td></tr>
-<tr><td valign="top"><b>Tracks</b></td><td>Timeline for audio takes and note content. Includes a top ruler with playhead and loop markers, track header controls, input VU meters, range editing, group editing, punch-in markers, and retrigger stretch actions.</td></tr>
+<tr><td valign="top"><b>Tracks</b></td><td>Timeline for audio takes and note content. Includes a top ruler with playhead and loop markers, track header controls, input VU meters, range editing, group editing, punch-in markers, SFZ creation from drum takes, and retrigger stretch actions.</td></tr>
 <tr><td valign="top"><b>Instrument</b></td><td>Sampler, SoundFont, and SFZ editing, plus direct sample recording into sampler slots.</td></tr>
 <tr><td valign="top"><b>Mixer</b></td><td>Per-track and bus gain, pan, mute, solo, DSP chains, group mute buttons for audio / notation tracks, and spectrum analysis.</td></tr>
 <tr><td valign="top"><b>Settings</b></td><td>Audio backend, MIDI, theme, key bindings, and GUI settings.</td></tr>
@@ -113,6 +113,7 @@ void HelpPanel::load_documentation() {
 <li>During recording the waveform updates in real time. The existing take is not played back while recording is active.</li>
 <li>Use <b>Ctrl/Cmd-click</b> for multi-select and <b>Shift-click</b> for range selection across tracks.</li>
 <li>Cut, copy, paste, silence, and insert-gap operations apply to all selected tracks.</li>
+<li>Right-click an audio drum track and choose <b>Create SFZ Instrument</b> to extract its hits into a multi-layer SFZ with round-robin variations for the linked note track, or <b>Create Drum Kit SFZ from All Tracks</b> to build one full-kit instrument with notes mapped from each track.</li>
 <li>Right-click an audio track for <b>Retrigger Stretch Selection</b> or <b>Retrigger Stretch Whole Track</b>. This needs a linked note track with quantized notes.</li>
 </ul>
 

@@ -39,6 +39,9 @@ struct SfzRegion {
     int lovel = 0;
     int hivel = 127;
 
+    int seq_length = 0;
+    int seq_position = 0;
+
     float volume    = 0.0f;       // dB gain (0 = unity)
     float tune      = 0.0f;       // cents offset
     int   transpose = 0;          // semitone offset
@@ -108,6 +111,7 @@ private:
     static constexpr size_t MAX_VOICES = 48;
 
     float m_volume = 1.0f;
+    uint32_t m_sequence_counter = 0;
 };
 
 } // namespace tpanar_ns

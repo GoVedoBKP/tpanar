@@ -223,6 +223,8 @@ bool SfzInstrument::load_sfz(const std::string& path)
             else if (key == "pitch_keycenter") reg.pitch_keycenter = parse_key(val);
             else if (key == "lovel")           reg.lovel           = ival();
             else if (key == "hivel")           reg.hivel           = ival();
+            else if (key == "seq_length")      reg.seq_length      = std::max(0, ival());
+            else if (key == "seq_position")    reg.seq_position    = std::max(0, ival());
             else if (key == "volume")          reg.volume          = fval();
             else if (key == "tune")            reg.tune            = fval();
             else if (key == "transpose")       reg.transpose       = ival();
@@ -321,10 +323,14 @@ void SfzInstrument::note_on(uint8_t note, uint8_t velocity,
 
     float note_hz     = midi_note_to_hz(note);
     float vel_f       = velocity / 127.0f;
+    const uint32_t sequence_slot = m_sequence_counter++;
 
     for (const auto& reg : m_regions) {
         if (note < reg.lokey || note > reg.hikey) continue;
         if (velocity < reg.lovel || velocity > reg.hivel) continue;
+        if (reg.seq_length > 0 && reg.seq_position > 0) {
+            if ((int)(sequence_slot % (uint32_t)reg.seq_length) + 1 != reg.seq_position) continue;
+        }
         if (!reg.data) continue;
 
         // Pitch: note_hz / keycenter_hz * 440 → SampleVoice divides by 440 → correct ratio

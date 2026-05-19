@@ -21,10 +21,13 @@
 #include <wx/dcclient.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcmemory.h>
+#include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include "wx_tracks_panel.h"
 #include "wx_detached_frame.h"
+#include "wx_main_window.h"
 #include "../core/engine.h"
 #include "../instrument/sample_instrument.h"
 #include "../instrument/soundfont_instrument.h"
@@ -817,6 +820,8 @@ enum {
     ID_MENU_PASTE,
     ID_MENU_SILENCE,
     ID_MENU_INSERT_SILENCE,
+    ID_MENU_CREATE_SFZ,
+    ID_MENU_CREATE_SFZ_DRUMKIT,
     ID_MENU_RETRIGGER_SELECTION,
     ID_MENU_RETRIGGER_WHOLE,
     ID_MENU_UNDO,
@@ -1030,6 +1035,25 @@ int TracksView::get_track_height(int track_idx) const {
     }
     auto& track = m_engine.track(track_idx);
     return track.is_minimized() ? 20 : 80;
+}
+
+int TracksView::track_at_y(int logical_y) const
+{
+    if (logical_y < kTracksContentTop) {
+        return -1;
+    }
+
+    int cur_y = kTracksContentTop;
+    const int num_tracks = (int)m_engine.track_count();
+    for (int t = 0; t < num_tracks; ++t) {
+        const int track_h = get_track_height(t);
+        if (logical_y >= cur_y && logical_y < cur_y + track_h) {
+            return t;
+        }
+        cur_y += track_h;
+    }
+
+    return -1;
 }
 
 void TracksView::toggle_track_minimize(int track_idx) {
@@ -2120,6 +2144,19 @@ void TracksView::OnMouseRightClick(wxMouseEvent& event) {
     int ux = 0, uy = 0;
     CalcUnscrolledPosition(event.GetX(), event.GetY(), &ux, &uy);
     m_last_right_click_x = ux;
+
+    const int clicked_track = track_at_y(uy);
+    if (clicked_track >= 0) {
+        if (!is_track_selected(clicked_track)) {
+            select_single_track(clicked_track);
+            Refresh(false);
+        } else {
+            m_selected_track = clicked_track;
+            m_selection_anchor_track = clicked_track;
+            invalidate_static();
+        }
+    }
+
     event.Skip();
 }
 
@@ -2132,10 +2169,25 @@ void TracksView::OnContextMenu(wxContextMenuEvent& event) {
     menu.Append(ID_MENU_SILENCE, "Silence\tS", "Silence selection");
     menu.Append(ID_MENU_INSERT_SILENCE, "Insert Gap\tI", "Insert gap at cursor");
 
+    bool can_create_sfz = false;
+    bool can_create_sfz_drumkit = false;
     bool can_retrigger = false;
     if (m_selected_track >= 0 && (size_t)m_selected_track < m_engine.track_count()) {
         const Track& track = m_engine.track((size_t)m_selected_track);
         const int linked_track = track.linked_track();
+        can_create_sfz = track.kind() == TrackKind::Audio &&
+                         track.instrument() &&
+                         track.instrument()->type() == InstrumentType::Sampler;
+        if (can_create_sfz) {
+            for (size_t track_index = 0; track_index < m_engine.track_count(); ++track_index) {
+                if (m_engine.is_tempo_track(track_index)) continue;
+                const Track& other_track = m_engine.track(track_index);
+                if (other_track.kind() != TrackKind::Audio) continue;
+                if (!other_track.instrument() || other_track.instrument()->type() != InstrumentType::Sampler) continue;
+                can_create_sfz_drumkit = true;
+                break;
+            }
+        }
         can_retrigger = track.kind() == TrackKind::Audio &&
                         track.instrument() &&
                         track.instrument()->type() == InstrumentType::Sampler &&
@@ -2143,8 +2195,16 @@ void TracksView::OnContextMenu(wxContextMenuEvent& event) {
                         (size_t)linked_track < m_engine.track_count() &&
                         m_engine.track((size_t)linked_track).kind() == TrackKind::Note;
     }
-    if (can_retrigger) {
+    if (can_create_sfz || can_retrigger) {
         menu.AppendSeparator();
+        if (can_create_sfz) {
+            menu.Append(ID_MENU_CREATE_SFZ, "Create SFZ Instrument...", "Extract drum hits and build an SFZ instrument from this track");
+            if (can_create_sfz_drumkit) {
+                menu.Append(ID_MENU_CREATE_SFZ_DRUMKIT, "Create Drum Kit SFZ from All Tracks...", "Build one SFZ drum kit from all eligible audio tracks");
+            }
+        }
+    }
+    if (can_retrigger) {
         menu.Append(ID_MENU_RETRIGGER_SELECTION, "Retrigger Stretch Selection", "Stretch the selected audio range to the linked note track");
         menu.Append(ID_MENU_RETRIGGER_WHOLE, "Retrigger Stretch Whole Track", "Stretch the whole audio track to the linked note track");
     }
@@ -2168,6 +2228,8 @@ void TracksView::OnContextMenu(wxContextMenuEvent& event) {
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_paste(); }, ID_MENU_PASTE);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_silence(); }, ID_MENU_SILENCE);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_insert_silence(); }, ID_MENU_INSERT_SILENCE);
+    Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_create_sfz_instrument(); }, ID_MENU_CREATE_SFZ);
+    Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_create_sfz_drumkit(); }, ID_MENU_CREATE_SFZ_DRUMKIT);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_retrigger_stretch_selection(); }, ID_MENU_RETRIGGER_SELECTION);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_retrigger_stretch_whole_track(); }, ID_MENU_RETRIGGER_WHOLE);
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) { do_undo(); }, ID_MENU_UNDO);
@@ -2427,6 +2489,132 @@ void TracksView::do_insert_silence() {
         update_view();
         Refresh();
     }
+}
+
+void TracksView::do_create_sfz_instrument() {
+    if (m_selected_track < 0 || (size_t)m_selected_track >= m_engine.track_count()) {
+        wxMessageBox("Select an audio track first.", "Create SFZ", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    const Track& track = m_engine.track((size_t)m_selected_track);
+    if (track.kind() != TrackKind::Audio ||
+        !track.instrument() ||
+        track.instrument()->type() != InstrumentType::Sampler) {
+        wxMessageBox("SFZ creation is available only for sampler-backed audio tracks.", "Create SFZ", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    wxFileName out_name(wxString::FromUTF8(track.name()));
+    if (!out_name.GetName().empty()) {
+        out_name.SetFullName(out_name.GetName() + ".sfz");
+    } else {
+        out_name.SetFullName(wxString::Format("track_%d.sfz", m_selected_track));
+    }
+
+    wxFileDialog dlg(this,
+                     "Create SFZ Instrument",
+                     "",
+                     out_name.GetFullName(),
+                     "SFZ files (*.sfz)|*.sfz",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    wxFileName out_path(dlg.GetPath());
+    if (!out_path.HasExt()) {
+        out_path.SetExt("sfz");
+    }
+
+    size_t instrument_index = 0;
+    std::string error_message;
+    if (!m_engine.create_sfz_instrument_from_audio_track((size_t)m_selected_track,
+                                                         out_path.GetFullPath().ToStdString(),
+                                                         &instrument_index,
+                                                         &error_message)) {
+        wxMessageBox(error_message.empty()
+                         ? "Could not create an SFZ instrument from this track."
+                         : wxString::FromUTF8(error_message),
+                     "Create SFZ",
+                     wxOK | wxICON_ERROR,
+                     this);
+        return;
+    }
+
+    if (auto* main_window = wxDynamicCast(wxGetTopLevelParent(this), WxMainWindow)) {
+        main_window->update_all_uis();
+    }
+
+    const int linked_track = track.linked_track();
+    const bool assigned_to_note_track =
+        linked_track >= 0 &&
+        (size_t)linked_track < m_engine.track_count() &&
+        m_engine.track((size_t)linked_track).kind() == TrackKind::Note &&
+        m_engine.track((size_t)linked_track).instrument() == &m_engine.instrument(instrument_index);
+    wxMessageBox(assigned_to_note_track
+                     ? "SFZ instrument created and assigned to the linked note track."
+                     : "SFZ instrument created and added to the instrument list.",
+                 "Create SFZ",
+                 wxOK | wxICON_INFORMATION,
+                 this);
+}
+
+void TracksView::do_create_sfz_drumkit() {
+    if (m_selected_track < 0 || (size_t)m_selected_track >= m_engine.track_count()) {
+        wxMessageBox("Select an audio track first.", "Create Drum Kit SFZ", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    const Track& track = m_engine.track((size_t)m_selected_track);
+    if (track.kind() != TrackKind::Audio ||
+        !track.instrument() ||
+        track.instrument()->type() != InstrumentType::Sampler) {
+        wxMessageBox("Drum-kit SFZ creation is available from an audio track context menu.", "Create Drum Kit SFZ", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    wxFileName out_name(wxString::FromUTF8(track.name()));
+    const wxString base_name = out_name.GetName().empty() ? "drumkit" : out_name.GetName() + "_kit";
+    out_name.SetFullName(base_name + ".sfz");
+
+    wxFileDialog dlg(this,
+                     "Create Drum Kit SFZ",
+                     "",
+                     out_name.GetFullName(),
+                     "SFZ files (*.sfz)|*.sfz",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    wxFileName out_path(dlg.GetPath());
+    if (!out_path.HasExt()) {
+        out_path.SetExt("sfz");
+    }
+
+    size_t instrument_index = 0;
+    std::string error_message;
+    if (!m_engine.create_sfz_instrument_from_all_audio_tracks(out_path.GetFullPath().ToStdString(),
+                                                              &instrument_index,
+                                                              &error_message)) {
+        wxMessageBox(error_message.empty()
+                         ? "Could not create a drum-kit SFZ from the project tracks."
+                         : wxString::FromUTF8(error_message),
+                     "Create Drum Kit SFZ",
+                     wxOK | wxICON_ERROR,
+                     this);
+        return;
+    }
+
+    if (auto* main_window = wxDynamicCast(wxGetTopLevelParent(this), WxMainWindow)) {
+        main_window->update_all_uis();
+    }
+
+    wxMessageBox("Drum-kit SFZ created from all eligible audio tracks and assigned to linked note tracks.",
+                 "Create Drum Kit SFZ",
+                 wxOK | wxICON_INFORMATION,
+                 this);
 }
 
 void TracksView::do_retrigger_stretch_selection() {
